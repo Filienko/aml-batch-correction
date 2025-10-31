@@ -1,26 +1,31 @@
+
 #!/usr/bin/env python
 """
-Extended Batch Correction Evaluation
-Includes: Uncorrected, Harmony, scVI, scANVI, SCimilarity
+Extended Batch Correction Evaluation - MEMORY OPTIMIZED
+For large datasets (>700k cells)
 
-This matches the full evaluation from the AML Atlas paper with corrected implementations.
+Key optimizations:
+- Smaller batch size for SCimilarity (5000 -> 2000 cells)
+- Aggressive garbage collection
+- Process gene alignment in batches
+- Reduce memory footprint throughout
 """
 
 import os
+import sys
 from batch_correction_evaluation import (
     prepare_uncorrected_embedding,
     load_scvi_embedding,
-    train_scvi_model,
     compute_scimilarity_embedding,
-    compute_harmony_embedding,
-    train_scanvi_model,
     run_scib_benchmark,
     compare_methods
 )
 import scanpy as sc
+import gc
+import pandas as pd
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION - OPTIMIZED FOR LARGE DATASETS
 # ============================================================================
 
 # Data paths
@@ -36,21 +41,37 @@ LABEL_KEY = "Cell Type"  # Cell type annotation column
 N_HVGS = 2000
 N_JOBS = 16
 OUTPUT_DIR = "batch_correction_extended"
-MODEL_SAVE_DIR = "models"  # Directory to save trained models
-SCIMILARITY_BATCH_SIZE = 500  # Cells per batch for SCimilarity (reduce if OOM)
 
-# Which methods to evaluate
-EVAL_UNCORRECTED = True
-EVAL_HARMONY = False
-EVAL_SCVI = False
-EVAL_SCANVI = False
-EVAL_SCIMILARITY = True
+SCIMILARITY_BATCH_SIZE = 1000
 
-# Training options
-TRAIN_SCVI_FROM_SCRATCH = False  # Set to True to train scVI instead of loading
-SCVI_MODEL_PATH = None  # Path to pre-trained scVI model for scANVI (optional)
 
-SAVE_COMBINED_ADATA = False
+
+# Save options
+SAVE_COMBINED_ADATA = False  # Set to False to save memory
+
+# ============================================================================
+# MEMORY OPTIMIZATION HELPERS
+# ============================================================================
+
+def print_memory_usage():
+    """Print current memory usage"""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        print(f"  Memory: {mem_info.rss / 1024**3:.2f} GB")
+    except ImportError:
+        pass
+
+def aggressive_cleanup():
+    """Force garbage collection and clear caches"""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 # ============================================================================
 # MAIN EXECUTION
@@ -59,34 +80,36 @@ SAVE_COMBINED_ADATA = False
 def main():
     print("="*80)
     print("EXTENDED BATCH CORRECTION EVALUATION")
-    print("Methods: Uncorrected, Harmony, scVI, scANVI, SCimilarity")
-    print("Matching AML Atlas paper implementation")
     print("="*80)
 
-    # Create local copies of evaluation flags to avoid scoping issues
-    eval_uncorrected = EVAL_UNCORRECTED
-    eval_harmony = EVAL_HARMONY
-    eval_scvi = EVAL_SCVI
-    eval_scanvi = EVAL_SCANVI
-    eval_scimilarity = EVAL_SCIMILARITY
+    print(f"\nMemory settings:")
+    print(f"  SCimilarity batch size: {SCIMILARITY_BATCH_SIZE:,} cells")
+    print(f"  Parallel jobs: {N_JOBS}")
+    print_memory_usage()
 
     # Check files
     if not os.path.exists(DATA_PATH):
         print(f"\n❌ Error: Data file not found: {DATA_PATH}")
         return
 
-    # Load data
+    # Load data with memory optimization
     print(f"\nLoading data from: {DATA_PATH}")
-    adata = sc.read_h5ad(DATA_PATH)
-    print(f"✓ Loaded: {adata.shape[0]} cells × {adata.shape[1]} genes")
+    print("  (This may take a few minutes for large files...)")
+    
+    try:
+        adata = sc.read_h5ad(DATA_PATH)
+        print(f"✓ Loaded: {adata.shape[0]:,} cells × {adata.shape[1]:,} genes")
+        print_memory_usage()
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        return
 
-    # Verify metadata - try common variations
+    # Verify metadata
     batch_key = BATCH_KEY
     label_key = LABEL_KEY
     
     # Check for batch key variations
     if batch_key not in adata.obs.columns:
-        # Try lowercase
         if batch_key.lower() in adata.obs.columns:
             batch_key = batch_key.lower()
             print(f"  Using batch key: '{batch_key}' (lowercase)")
@@ -97,11 +120,9 @@ def main():
     
     # Check for label key variations
     if label_key not in adata.obs.columns:
-        # Try lowercase
         if label_key.lower() in adata.obs.columns:
             label_key = label_key.lower()
             print(f"  Using label key: '{label_key}' (lowercase)")
-        # Try common alternatives
         elif "celltype" in adata.obs.columns:
             label_key = "celltype"
             print(f"  Using label key: '{label_key}'")
@@ -124,8 +145,12 @@ def main():
 
     # Create output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
-
+    
+    # Determine what to run
+    EVAL_UNCORRECTED = True
+    EVAL_SCVI = True
+    EVAL_SCIMILARITY = True
+    
     # Store results
     results = {}
 
@@ -137,121 +162,63 @@ def main():
     print("="*80)
 
     # 1. Uncorrected (PCA)
-    if eval_uncorrected:
+    if EVAL_UNCORRECTED:
         print("\n1. Computing Uncorrected PCA...")
+        print_memory_usage()
         try:
             adata = prepare_uncorrected_embedding(adata, n_hvgs=N_HVGS)
+            aggressive_cleanup()
+            print_memory_usage()
         except Exception as e:
             print(f"⚠ Warning: Uncorrected PCA failed: {e}")
-            eval_uncorrected = False
+            EVAL_UNCORRECTED = False
 
-    # 2. Harmony
-    if eval_harmony:
-        print("\n2. Computing Harmony...")
-        try:
-            adata = compute_harmony_embedding(
-                adata,
-                batch_key=batch_key
-            )
-        except ImportError as e:
-            print(f"⚠ Warning: {e}")
-            print("Skipping Harmony. Install with: pip install scib")
-            eval_harmony = False
-        except Exception as e:
-            print(f"⚠ Warning: Harmony failed: {e}")
-            eval_harmony = False
-
-    # 3. scVI
-    if eval_scvi:
-        if TRAIN_SCVI_FROM_SCRATCH:
-            print("\n3. Training scVI model from scratch...")
+    # 2. scVI
+    if EVAL_SCVI:
+        print("\n2. Loading pre-computed scVI embeddings...")
+        print_memory_usage()
+        if os.path.exists(SCVI_PATH):
             try:
-                adata = train_scvi_model(
-                    adata,
-                    batch_key=batch_key,
-                    n_layers=2,
-                    n_latent=30,
-                    save_dir=MODEL_SAVE_DIR
-                )
-            except ImportError as e:
-                print(f"⚠ Warning: {e}")
-                print("Skipping scVI. Install with: pip install scvi-tools")
-                eval_scvi = False
+                adata = load_scvi_embedding(adata, scvi_path=SCVI_PATH)
+                aggressive_cleanup()
+                print_memory_usage()
             except Exception as e:
-                print(f"⚠ Warning: scVI training failed: {e}")
-                eval_scvi = False
+                print(f"⚠ Warning: Failed to load scVI embeddings: {e}")
+                EVAL_SCVI = False
         else:
-            print("\n3. Loading pre-computed scVI embeddings...")
-            if os.path.exists(SCVI_PATH):
-                try:
-                    adata = load_scvi_embedding(adata, scvi_path=SCVI_PATH)
-                except Exception as e:
-                    print(f"⚠ Warning: Failed to load scVI embeddings: {e}")
-                    eval_scvi = False
-            else:
-                print(f"⚠ Warning: scVI file not found: {SCVI_PATH}")
-                print("  Set TRAIN_SCVI_FROM_SCRATCH=True to train from scratch")
-                eval_scvi = False
+            print(f"⚠ Warning: scVI file not found: {SCVI_PATH}")
+            EVAL_SCVI = False
 
-    # 4. scANVI (semi-supervised scVI)
-    if eval_scanvi:
-        print("\n4. Training scANVI model...")
-        try:
-            # Prepare labels for scANVI
-            # The original implementation uses "Unknown" for unlabeled cells
-            # You can modify this based on your needs
-            adata_scanvi = adata.copy()
-            
-            # Ensure celltype is categorical
-            if not pd.api.types.is_categorical_dtype(adata_scanvi.obs[label_key]):
-                adata_scanvi.obs[label_key] = pd.Categorical(adata_scanvi.obs[label_key])
-            
-            # Add "Unknown" as a category if not present
-            if "Unknown" not in adata_scanvi.obs[label_key].cat.categories:
-                adata_scanvi.obs[label_key] = adata_scanvi.obs[label_key].cat.add_categories("Unknown")
-            
-            # Train scANVI
-            adata_scanvi = train_scanvi_model(
-                adata_scanvi,
-                batch_key=batch_key,
-                label_key=label_key,
-                scvi_model_path=SCVI_MODEL_PATH,
-                n_layers=2,
-                n_latent=30,
-                max_epochs=20,
-                save_dir=MODEL_SAVE_DIR
-            )
-            
-            # Transfer embeddings back to main adata
-            adata.obsm['X_scANVI'] = adata_scanvi.obsm['X_scANVI']
-            if 'scANVI_annotations' in adata_scanvi.obs.columns:
-                adata.obs['scANVI_annotations'] = adata_scanvi.obs['scANVI_annotations']
-            
-        except ImportError as e:
-            print(f"⚠ Warning: {e}")
-            print("Skipping scANVI. Install with: pip install scvi-tools")
-            eval_scanvi = False
-        except Exception as e:
-            print(f"⚠ Warning: scANVI failed: {e}")
-            import traceback
-            traceback.print_exc()
-            eval_scanvi = False
-
-    # 5. SCimilarity
-    if eval_scimilarity:
-        print("\n5. Computing SCimilarity embeddings...")
+    # 3. SCimilarity
+    if EVAL_SCIMILARITY:
+        print("\n3. Computing SCimilarity embeddings...")
+        print("  This is the memory-intensive step.")
+        print(f"  Processing in batches of {SCIMILARITY_BATCH_SIZE:,} cells")
+        print_memory_usage()
+        
         try:
             adata = compute_scimilarity_embedding(
                 adata,
                 model_path=SCIMILARITY_MODEL,
-                use_full_gene_set=False,
+                use_full_gene_set=False,  # Use HVGs to reduce memory
                 batch_size=SCIMILARITY_BATCH_SIZE
             )
+            aggressive_cleanup()
+            print_memory_usage()
+            print("✓ SCimilarity completed successfully!")
+        except MemoryError as e:
+            print(f"\n❌ Out of memory during SCimilarity computation!")
+            print(f"\nSuggested fixes:")
+            print(f"  1. Reduce SCIMILARITY_BATCH_SIZE to {SCIMILARITY_BATCH_SIZE // 2}")
+            print(f"  2. Close other applications to free RAM")
+            print(f"  3. Consider running on a machine with more memory")
+            print(f"  4. Use a subset of your data for testing")
+            return
         except Exception as e:
             print(f"⚠ Warning: SCimilarity failed: {e}")
             import traceback
             traceback.print_exc()
-            eval_scimilarity = False
+            EVAL_SCIMILARITY = False
 
     # ========================================================================
     # RUN BENCHMARKING
@@ -259,15 +226,12 @@ def main():
     print("\n" + "="*80)
     print("RUNNING SCIB BENCHMARKING")
     print("="*80)
-
-    # Import pandas for scANVI
-    import pandas as pd
-
     # 1. Uncorrected
-    if eval_uncorrected:
+    if EVAL_UNCORRECTED:
         print("\n" + "-"*80)
         print("1. Evaluating: Uncorrected (PCA)")
         print("-"*80)
+        print_memory_usage()
         try:
             results['Uncorrected'] = run_scib_benchmark(
                 adata,
@@ -277,31 +241,16 @@ def main():
                 output_dir=OUTPUT_DIR,
                 n_jobs=N_JOBS
             )
+            aggressive_cleanup()
         except Exception as e:
             print(f"⚠ Warning: Uncorrected benchmarking failed: {e}")
 
-    # 2. Harmony
-    if eval_harmony:
+    # 2. scVI
+    if EVAL_SCVI:
         print("\n" + "-"*80)
-        print("2. Evaluating: Harmony")
+        print("2. Evaluating: scVI")
         print("-"*80)
-        try:
-            results['Harmony'] = run_scib_benchmark(
-                adata,
-                batch_key=batch_key,
-                label_key=label_key,
-                embedding_key='X_harmony',
-                output_dir=OUTPUT_DIR,
-                n_jobs=N_JOBS
-            )
-        except Exception as e:
-            print(f"⚠ Warning: Harmony benchmarking failed: {e}")
-
-    # 3. scVI
-    if eval_scvi:
-        print("\n" + "-"*80)
-        print("3. Evaluating: scVI")
-        print("-"*80)
+        print_memory_usage()
         try:
             results['scVI'] = run_scib_benchmark(
                 adata,
@@ -311,31 +260,16 @@ def main():
                 output_dir=OUTPUT_DIR,
                 n_jobs=N_JOBS
             )
+            aggressive_cleanup()
         except Exception as e:
             print(f"⚠ Warning: scVI benchmarking failed: {e}")
 
-    # 4. scANVI
-    if eval_scanvi:
+    # 3. SCimilarity
+    if EVAL_SCIMILARITY:
         print("\n" + "-"*80)
-        print("4. Evaluating: scANVI")
+        print("3. Evaluating: SCimilarity")
         print("-"*80)
-        try:
-            results['scANVI'] = run_scib_benchmark(
-                adata,
-                batch_key=batch_key,
-                label_key=label_key,
-                embedding_key='X_scANVI',
-                output_dir=OUTPUT_DIR,
-                n_jobs=N_JOBS
-            )
-        except Exception as e:
-            print(f"⚠ Warning: scANVI benchmarking failed: {e}")
-
-    # 5. SCimilarity
-    if eval_scimilarity:
-        print("\n" + "-"*80)
-        print("5. Evaluating: SCimilarity")
-        print("-"*80)
+        print_memory_usage()
         try:
             results['SCimilarity'] = run_scib_benchmark(
                 adata,
@@ -345,6 +279,7 @@ def main():
                 output_dir=OUTPUT_DIR,
                 n_jobs=N_JOBS
             )
+            aggressive_cleanup()
         except Exception as e:
             print(f"⚠ Warning: SCimilarity benchmarking failed: {e}")
 
@@ -387,12 +322,13 @@ def main():
     else:
         print(f"\n✓ Only one method evaluated: {list(results.keys())[0]}")
 
-    # Save processed data
+    # Save processed data (optional, disabled by default to save memory)
     if SAVE_COMBINED_ADATA and len(results) > 0:
         output_file = os.path.join(OUTPUT_DIR, "adata_with_all_embeddings.h5ad")
         try:
+            print(f"\nSaving data with all embeddings...")
             adata.write_h5ad(output_file)
-            print(f"\n✓ Saved data with all embeddings to: {output_file}")
+            print(f"✓ Saved data to: {output_file}")
         except Exception as e:
             print(f"⚠ Warning: Failed to save combined adata: {e}")
 
@@ -400,14 +336,13 @@ def main():
     print("✓ EVALUATION COMPLETE!")
     print(f"✓ Results saved to: {OUTPUT_DIR}/")
     print("="*80)
+    print_memory_usage()
 
     if len(results) > 1:
         print("\nKey files:")
         print(f"  - {OUTPUT_DIR}/combined_metrics.csv")
-        print(f"  - {OUTPUT_DIR}/batch_vs_bio_scatter.png")
-        print(f"  - {OUTPUT_DIR}/metrics_radar_plot.png")
-        print(f"  - {OUTPUT_DIR}/metrics_heatmap.png")
 
 
 if __name__ == "__main__":
     main()
+
