@@ -15,6 +15,7 @@ import os
 import sys
 from batch_correction_evaluation import (
     prepare_uncorrected_embedding,
+    preprocess_adata,
     load_scvi_embedding,
     compute_scimilarity_embedding,
     run_scib_benchmark,
@@ -98,6 +99,7 @@ def main():
     
     try:
         adata = sc.read_h5ad(DATA_PATH)
+        adata = preprocess_adata(adata)
         print(f"✓ Loaded: {adata.shape[0]:,} cells × {adata.shape[1]:,} genes")
         print_memory_usage()
     except Exception as e:
@@ -148,7 +150,7 @@ def main():
     
     # Determine what to run
     EVAL_UNCORRECTED = True
-    EVAL_SCVI = True
+    EVAL_SCVI = False
     EVAL_SCIMILARITY = True
     
     # Store results

@@ -48,52 +48,137 @@ sc.settings.set_figure_params(dpi=200, frameon=False)
 sc.set_figure_params(dpi=200)
 sc.set_figure_params(figsize=(4, 4))
 
+def preprocess_adata(adata: ad.AnnData) -> ad.AnnData:
+    """Apply the same preprocessing as the original AML Atlas analysis."""
+    
+    print("Preprocessing dataset...")
+    
+    # 1. Cell filtering (matching original)
+    print(f"  Starting: {adata.n_obs:,} cells")
+    sc.pp.filter_cells(adata, min_counts=1000)
+    sc.pp.filter_cells(adata, min_genes=300)
+    print(f"  After cell filtering: {adata.n_obs:,} cells")
+    
+    # 2. Remove samples with low cell counts
+    cell_counts = adata.obs['Sample'].value_counts()
+    keep = cell_counts.index[cell_counts >= 50]
+    adata = adata[adata.obs['Sample'].isin(keep)].copy()
+    print(f"  After sample filtering: {adata.n_obs:,} cells")
+    
+    # 3. Harmonize cell type names (EXACT mapping from original)
+    print("  Harmonizing cell types...")
+    celltype_mapping = {
+        "Perivascular cell": "Stromal Cells",
+        "Megakaryocyte": "Megakaryocytes",
+        "Plasma cell": "Plasma Cells",
+        "Plasmablast": "Plasma Cells",
+        "cDC1": "Conventional Dendritic Cells",
+        "cDC2": "Conventional Dendritic Cells",
+        "DC precursor": "Dendritic Progenitor Cell",
+        "Ery": "Erythroid Cells",
+        "Dendritic Cells": "Conventional Dendritic Cells",
+        "MAIT": "T Cells",
+        "CD8+ T": "CD8+ T Cells",
+        "CD4+ T": "CD4+ T Cells",
+        "gd T": "T Cells",
+        "Pre-B": "B Cell Precursors",
+        "Pro-B": "B Cell Precursors",
+        "Myelocytes": "Granulocytes",
+        "Granulocyte": "Granulocytes",
+        "Promyelocytes": "Granulocytes",
+        "HLA-II+ monocyte": "Monocytes",
+        "HSC": "HSC/MPPs",
+        "MPP": "HSC/MPPs",
+        "CD14+ monocyte": "Monocytes",
+        "CD11c+": "Unknown",
+        "LymP": "Unknown"
+    }
+    
+    # Apply to your cell type column (adjust column name as needed)
+    if "main_original_celltype" in adata.obs.columns:
+        adata.obs["main_original_celltype"] = adata.obs["main_original_celltype"].replace(celltype_mapping)
+    if "celltype" in adata.obs.columns:
+        adata.obs["celltype"] = adata.obs["celltype"].replace(celltype_mapping)
+    
+    print("✓ Preprocessing complete")
+    return adata
 
 def prepare_uncorrected_embedding(adata: ad.AnnData, n_hvgs: int = 2000) -> ad.AnnData:
     """
-    Prepare uncorrected PCA embedding for comparison.
-    Matches the original AML Atlas preprocessing.
-
+    Prepare uncorrected PCA embedding - handling pre-normalized data correctly.
+    
     Args:
-        adata: AnnData object with raw counts in .layers['counts']
-        n_hvgs: Number of highly variable genes to use
-
+        adata: AnnData with raw counts in .layers['counts'] and normalized data in .X
+        n_hvgs: Number of highly variable genes
+    
     Returns:
-        AnnData object with uncorrected PCA in .obsm['X_pca']
+        AnnData with X_pca and X_uncorrected embeddings
     """
-    print(f"\nPreparing uncorrected embedding with {n_hvgs} HVGs...")
-
-    # Work on a copy
+    print(f"\nPreparing uncorrected embedding...")
+    print(f"Input: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+    
+    # Check data state
+    x_max = adata.X.max()
+    counts_max = adata.layers['counts'].max()
+    print(f"  adata.X max: {x_max:.2f} (already normalized)")
+    print(f"  adata.layers['counts'] max: {counts_max:.0f} (raw counts)")
+    
+    # Create working copy with RAW COUNTS as .X
+    print("  Creating working copy with raw counts...")
     adata_work = adata.copy()
-
-    # Normalize and log-transform (matching original: target_sum=1e4)
+    adata_work.X = adata_work.layers['counts'].copy()  # ← KEY: Use raw counts!
+    
+    print(f"  Working data X max: {adata_work.X.max():.0f}")
+    
+    # Now follow the original workflow exactly
+    
+    # 1. Filter genes
+    print("  Filtering genes (min_cells=30)...")
+    n_genes_before = adata_work.n_vars
+    sc.pp.filter_genes(adata_work, min_cells=30)
+    print(f"    {n_genes_before:,} → {adata_work.n_vars:,} genes")
+    
+    # 2. Normalize to depth 10,000
+    print("  Normalizing to target_sum=1e4...")
     sc.pp.normalize_total(adata_work, target_sum=1e4)
+    
+    # 3. Log transform
+    print("  Log1p transform...")
     sc.pp.log1p(adata_work)
-
-    # Identify highly variable genes (matching original parameters)
+    print(f"    After log1p - X max: {adata_work.X.max():.2f}")
+    
+    # 4. Store normalized data
+    adata_work.raw = adata_work
+    adata_work.layers["normalised_counts"] = adata_work.X.copy()
+    
+    # 5. Identify HVGs using raw counts, then SUBSET
+    print(f"  Computing {n_hvgs} highly variable genes...")
     sc.pp.highly_variable_genes(
         adata_work,
         n_top_genes=n_hvgs,
-        flavor='seurat_v3',
-        layer='counts',
-        batch_key='Sample',
-        subset=False,
+        flavor="seurat_v3",
+        layer="counts",  # Uses raw counts for HVG calculation
+        batch_key="Sample",
+        subset=True,  # CRITICAL: Subset to HVGs
         span=0.8
     )
-
-    # Subset to HVGs and compute PCA
-    adata_hvg = adata_work[:, adata_work.var['highly_variable']].copy()
-    sc.pp.scale(adata_hvg, max_value=10)
-    sc.tl.pca(adata_hvg, svd_solver='arpack')
-
-    # Transfer PCA back to original object
-    adata.obsm['X_pca'] = adata_hvg.obsm['X_pca']
-    adata.obsm['X_uncorrected'] = adata_hvg.obsm['X_pca']  # For benchmarking
-
+    print(f"    Subset to {adata_work.n_vars:,} HVGs")
+    
+    # 6. Optional: Scale (helps with PCA stability)
+    # sc.pp.scale(adata_work, max_value=10)
+    
+    # 7. Compute PCA on normalized, log-transformed, HVG-subset data
+    print("  Computing PCA...")
+    sc.tl.pca(adata_work, svd_solver='arpack', use_highly_variable=True)
+    print(f"    PCA shape: {adata_work.obsm['X_pca'].shape}")
+    
+    # 8. Transfer PCA back to original object
+    adata.obsm['X_pca'] = adata_work.obsm['X_pca'].copy()
+    adata.obsm['X_uncorrected'] = adata_work.obsm['X_pca'].copy()
+    
     print(f"✓ Uncorrected PCA computed: {adata.obsm['X_pca'].shape}")
-
+    
     return adata
-
 
 def load_scvi_embedding(
     adata: ad.AnnData,
@@ -104,7 +189,7 @@ def load_scvi_embedding(
 
     Args:
         adata: Original AnnData object
-        scvi_path: Path to scVI-corrected embeddings
+        scvi_path: Path to scVI-corrected embeddings (must be .h5ad)
 
     Returns:
         AnnData object with scVI embeddings in .obsm['X_scVI']
@@ -117,21 +202,18 @@ def load_scvi_embedding(
     # Load scVI embeddings
     adata_scvi = sc.read_h5ad(scvi_path)
 
-    # Verify cell alignment
-    if not all(adata.obs_names == adata_scvi.obs_names):
-        print("Warning: Cell names don't match. Attempting to align...")
-        common_cells = adata.obs_names.intersection(adata_scvi.obs_names)
-        adata = adata[common_cells].copy()
-        adata_scvi = adata_scvi[common_cells].copy()
-        print(f"  Aligned to {len(common_cells)} common cells")
-
-    # Transfer scVI embeddings
+    if adata.n_obs != adata_scvi.n_obs:
+        raise ValueError(
+            f"Cell number mismatch! Main adata has {adata.n_obs} cells, "
+            f"but scVI file has {adata_scvi.n_obs} cells."
+        )
+    
+    print(f"  ✓ Cell counts match ({adata.n_obs}). Assuming same cell order.")
     adata.obsm['X_scVI'] = adata_scvi.X.copy()
 
     print(f"✓ scVI embeddings loaded: {adata.obsm['X_scVI'].shape}")
 
     return adata
-
 
 def compute_scimilarity_embedding(
     adata: ad.AnnData,
@@ -177,11 +259,15 @@ def compute_scimilarity_embedding(
         # Use full gene set (recommended to avoid gene overlap issues)
         if adata.raw is None:
             print("  No .raw attribute found, using main object")
+            adata_full.X = adata_full.layers['counts'].copy()
             adata_full = adata.copy()
         else:
             print("  Using .raw attribute for full gene set")
             # Don't convert to full AnnData yet - work with view to save memory
             adata_full = adata.raw.to_adata()
+            if adata_full.X.max() < 100:
+                if 'counts' in adata.layers:
+                    adata_full.X = adata.layers['counts'].copy()
     else:
         if 'highly_variable' in adata.var.columns:
             print(f"  Using 'highly_variable' genes (use_full_gene_set=False)")

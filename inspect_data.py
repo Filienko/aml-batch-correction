@@ -23,7 +23,8 @@ def inspect_anndata(file_path: str):
     # Load data
     print("\nLoading data...")
     adata = sc.read_h5ad(file_path)
-    
+    print("names", adata.obs_names[:5])
+
     # Basic info
     print("\n" + "-"*80)
     print("BASIC INFORMATION")
@@ -206,7 +207,7 @@ def main():
         print("Please update the path in this script or move your data file.")
     
     # Check scVI file if exists
-    scvi_file = "data/AML_scAtlas_X_scVI.h5ad.gz"
+    scvi_file = "data/AML_scAtlas_X_scVI.h5ad"
     if os.path.exists(scvi_file):
         print("\n\n")
         inspect_anndata(scvi_file)
