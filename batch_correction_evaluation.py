@@ -39,6 +39,7 @@ except ImportError:
     SCVI_AVAILABLE = False
     print("Warning: scvi-tools not available")
 
+BATCH_KEY = "Study"
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=DeprecationWarning)
 warnings.simplefilter(action="ignore", category=UserWarning)
@@ -158,7 +159,7 @@ def prepare_uncorrected_embedding(adata: ad.AnnData, n_hvgs: int = 2000) -> ad.A
         n_top_genes=n_hvgs,
         flavor="seurat_v3",
         layer="counts",  # Uses raw counts for HVG calculation
-        batch_key="Sample",
+        batch_key=BATCH_KEY,
         subset=True,  # CRITICAL: Subset to HVGs
         span=0.8
     )

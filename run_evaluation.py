@@ -34,7 +34,7 @@ SCVI_PATH = "data/AML_scAtlas_X_scVI.h5ad"
 SCIMILARITY_MODEL = "models/model_v1.1"
 
 # Metadata keys
-BATCH_KEY = "Sample"
+BATCH_KEY = "Study"
 LABEL_KEY = "Cell Type"
 
 # CRITICAL MEMORY PARAMETERS - Adjust these if still running out of memory
