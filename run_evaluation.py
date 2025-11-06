@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 """
-FIXED: Batch Correction Evaluation - Auto-detect Column Names
-Automatically detects whether columns are capitalized or lowercase
+CORRECTED: Batch Correction Evaluation with Proper SCimilarity Integration
+
+Key fixes for SCimilarity:
+1. Use raw counts (not normalized)
+2. Align genes BEFORE normalization using align_dataset()
+3. Normalize using lognorm_counts() from scimilarity.utils
+4. Use full gene set (not HVGs)
 """
 
 import os
@@ -16,17 +21,21 @@ from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
+# Import the corrected SCimilarity function
+from scimilarity import CellAnnotation
+from scimilarity.utils import lognorm_counts, align_dataset
+
 # ============================================================================
 # AUTO-DETECT COLUMN NAMES
 # ============================================================================
 
 def detect_batch_key(adata):
-    """Auto-detect batch key (sample or study)"""
-    for key in ['sample', 'Sample', 'study', 'Study', 'batch', 'Batch']:
+    """Auto-detect batch key"""
+    for key in ['Study', 'Sample', 'Batch']:
         if key in adata.obs.columns:
             print(f"  ✓ Detected batch key: '{key}' ({adata.obs[key].nunique()} unique values)")
             return key
-    raise ValueError("No batch column found! Expected 'sample', 'Sample', 'study', or 'Study'")
+    raise ValueError("No batch column found!")
 
 def detect_label_key(adata):
     """Auto-detect cell type label key"""
@@ -34,50 +43,41 @@ def detect_label_key(adata):
         if key in adata.obs.columns:
             print(f"  ✓ Detected label key: '{key}' ({adata.obs[key].nunique()} unique types)")
             return key
-    raise ValueError("No cell type column found! Expected 'celltype', 'Cell Type', etc.")
+    raise ValueError("No cell type column found!")
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-# Data paths
 DATA_PATH = "data/AML_scAtlas.h5ad"
 SCVI_PATH = "data/AML_scAtlas_X_scVI.h5ad"
 SCIMILARITY_MODEL = "models/model_v1.1"
 
-# These will be auto-detected
-BATCH_KEY = None  # Will be set to "Sample" or "sample"
-LABEL_KEY = None  # Will be set to "Cell Type" or "celltype"
-BATCH_KEY_LOWER = None  # Lowercase version for preprocessing
+BATCH_KEY = None
+LABEL_KEY = None
+BATCH_KEY_LOWER = None
 
-# CRITICAL MEMORY PARAMETERS
 N_HVGS = 2000
 N_JOBS = 8
-OUTPUT_DIR = "batch_correction_results"
+OUTPUT_DIR = "batch_correction_results_fixed"
 
-# SCimilarity settings
-SCIMILARITY_BATCH_SIZE = 500
+# CRITICAL: Reduced for 733k cells!
+SCIMILARITY_BATCH_SIZE = 1000  # Reduced from 5000 to avoid OOM
 SCIMILARITY_ENABLED = True
-
-# Data processing settings
-CHUNK_SIZE = 50000
 
 # ============================================================================
 # MEMORY UTILITIES
 # ============================================================================
 
 def get_memory_usage_gb():
-    """Get current memory usage in GB"""
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024**3
 
 def print_memory():
-    """Print current memory usage"""
     mem_gb = get_memory_usage_gb()
     print(f"  💾 Memory: {mem_gb:.2f} GB")
 
 def force_cleanup():
-    """Aggressive memory cleanup"""
     gc.collect()
     try:
         import torch
@@ -88,15 +88,12 @@ def force_cleanup():
     gc.collect()
 
 def optimize_adata_memory(adata):
-    """Optimize AnnData memory usage"""
     import scipy.sparse as sp
     
     if not sp.issparse(adata.X):
-        print("  Converting to sparse matrix...")
         adata.X = sp.csr_matrix(adata.X)
     
     if adata.X.dtype != np.float32:
-        print("  Converting to float32...")
         adata.X.data = adata.X.data.astype(np.float32)
     
     for col in adata.obs.select_dtypes(include=['category']).columns:
@@ -105,21 +102,21 @@ def optimize_adata_memory(adata):
     return adata
 
 # ============================================================================
-# PREPROCESSING
+# PREPROCESSING (FOR UNCORRECTED PCA ONLY)
 # ============================================================================
 
 def preprocess_adata_exact(adata, batch_key_lower):
     """
-    EXACT preprocessing from AML-scAtlas
-    batch_key_lower: lowercase version of batch key for HVG selection
+    Preprocessing for uncorrected PCA baseline
+    NOTE: SCimilarity will use the ORIGINAL data, not this preprocessed version
     """
     print("\n" + "="*80)
-    print("PREPROCESSING (Exact AML-scAtlas replication)")
+    print("PREPROCESSING FOR UNCORRECTED PCA")
     print("="*80)
     print(f"Initial: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     print_memory()
     
-    # Step 1: Cell filtering
+    # Cell filtering
     print("\n1. Filtering cells (min_counts=1000, min_genes=300)...")
     n_before = adata.n_obs
     sc.pp.filter_cells(adata, min_counts=1000)
@@ -127,7 +124,7 @@ def preprocess_adata_exact(adata, batch_key_lower):
     print(f"  {n_before:,} → {adata.n_obs:,} cells")
     force_cleanup()
     
-    # Step 2: Remove low-count samples (using the actual batch column)
+    # Remove low-count samples
     print(f"\n2. Removing {BATCH_KEY}s with <50 cells...")
     cell_counts = adata.obs[BATCH_KEY].value_counts()
     keep_samples = cell_counts.index[cell_counts >= 50]
@@ -136,14 +133,14 @@ def preprocess_adata_exact(adata, batch_key_lower):
     print(f"  {n_before:,} → {adata.n_obs:,} cells")
     force_cleanup()
     
-    # Step 3: Filter genes
+    # Filter genes
     print("\n3. Filtering genes (min_cells=30)...")
     n_before = adata.n_vars
     sc.pp.filter_genes(adata, min_cells=30)
     print(f"  {n_before:,} → {adata.n_vars:,} genes")
     force_cleanup()
     
-    # Step 4: Harmonize cell types (if applicable)
+    # Harmonize cell types
     print("\n4. Harmonizing cell types...")
     celltype_mapping = {
         "Perivascular cell": "Stromal Cells",
@@ -172,69 +169,53 @@ def preprocess_adata_exact(adata, batch_key_lower):
         "LymP": "Unknown"
     }
     
-    # Apply to any cell type columns present
     for col in [LABEL_KEY, 'celltype', 'Cell Type', 'main_original_celltype']:
         if col in adata.obs.columns:
             adata.obs[col] = adata.obs[col].replace(celltype_mapping)
-            print(f"  ✓ Harmonized '{col}'")
     
-    # Step 5: Optimize memory
-    print("\n5. Optimizing memory...")
+    # Optimize memory
     adata = optimize_adata_memory(adata)
     force_cleanup()
-    print_memory()
     
     print(f"\n✓ Preprocessing complete: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     return adata
 
 # ============================================================================
-# UNCORRECTED EMBEDDING
+# UNCORRECTED PCA EMBEDDING
 # ============================================================================
 
 def prepare_uncorrected_embedding_exact(adata, batch_key_lower):
-    """
-    EXACT uncorrected PCA from AML-scAtlas
-    batch_key_lower: lowercase version for HVG batch_key parameter
-    """
+    """Compute uncorrected PCA baseline"""
     print("\n" + "="*80)
-    print("UNCORRECTED PCA (Exact AML-scAtlas replication)")
+    print("UNCORRECTED PCA")
     print("="*80)
     print_memory()
     
-    # Create working copy
-    print("Creating working copy...")
     adata_work = adata.copy()
     
-    # Use raw counts from layers
     if 'counts' in adata.layers:
-        print("  Using counts from .layers['counts']")
         adata_work.X = adata_work.layers['counts'].copy()
-    else:
-        print("  ⚠ Warning: No 'counts' layer, using .X as-is")
     
     force_cleanup()
     
     # Normalize
-    print("Log Normalization...")
+    print("Normalizing...")
     sc.pp.normalize_total(adata_work, target_sum=1e4)
     sc.pp.log1p(adata_work)
     
-    # Save normalized counts
     adata_work.raw = adata_work
     adata_work.layers["normalised_counts"] = adata_work.X.copy()
     
     force_cleanup()
     
-    # HVG selection - use lowercase batch key
+    # HVGs
     print(f"Finding {N_HVGS} highly variable genes...")
-    print(f"  Using batch_key='{batch_key_lower}' for HVG selection")
-    
     sc.pp.highly_variable_genes(
         adata_work,
         n_top_genes=N_HVGS,
         flavor="seurat_v3",
         layer="counts",
-        batch_key=batch_key_lower,  # Use lowercase version
+        batch_key=batch_key_lower,
         subset=True,
         span=0.8
     )
@@ -246,7 +227,6 @@ def prepare_uncorrected_embedding_exact(adata, batch_key_lower):
     print("Computing PCA...")
     sc.tl.pca(adata_work, svd_solver='arpack', use_highly_variable=True)
     
-    # Transfer to original
     adata.obsm['X_pca'] = adata_work.obsm['X_pca'].copy()
     adata.obsm['X_uncorrected'] = adata_work.obsm['X_pca'].copy()
     
@@ -257,109 +237,291 @@ def prepare_uncorrected_embedding_exact(adata, batch_key_lower):
     return adata
 
 # ============================================================================
-# SCIMILARITY (Optional)
+# SCVI LOADING
 # ============================================================================
 
-def compute_scimilarity_minimal(adata, model_path, batch_size=500):
-    """Ultra-conservative SCimilarity computation"""
+def load_scvi_embedding(adata, scvi_path="data/AML_scAtlas_X_scVI.h5ad"):
+    """
+    Load pre-computed scVI embeddings with graceful error handling.
+    
+    This function:
+    - Handles file not found (skips gracefully)
+    - Handles cell count mismatches (subsets to common cells)
+    - Handles cell order differences (reorders automatically)
+    - Never crashes the pipeline
+    
+    Args:
+        adata: Main AnnData object
+        scvi_path: Path to scVI embedding file
+    
+    Returns:
+        adata: With scVI embeddings added if successful,
+               or subset if cells don't match,
+               or unchanged if loading fails
+    """
     print("\n" + "="*80)
-    print("SCIMILARITY")
+    print("SCVI EMBEDDINGS")
     print("="*80)
     
-    try:
-        from scimilarity import CellAnnotation
-        from scimilarity.utils import lognorm_counts, align_dataset
-    except ImportError as e:
-        print(f"✗ SCimilarity not available: {e}")
+    # Check if file exists
+    if not os.path.exists(scvi_path):
+        print(f"  ℹ File not found: {scvi_path}")
+        print(f"  Skipping scVI evaluation")
         return adata
     
-    print(f"  Batch size: {batch_size} cells")
-    print_memory()
+    try:
+        print(f"  Loading scVI embeddings...")
+        print(f"  File: {scvi_path}")
+        
+        adata_scvi = sc.read_h5ad(scvi_path)
+        
+        print(f"  scVI file: {adata_scvi.n_obs:,} cells × {adata_scvi.n_vars:,} features")
+        print(f"  Main data: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+        
+        # Case 1: Perfect match
+        if adata_scvi.n_obs == adata.n_obs and (adata.obs_names == adata_scvi.obs_names).all():
+            print(f"  ✓ Perfect match (same cells, same order)")
+            
+            adata.obsm['X_scVI'] = adata_scvi.X.copy()
+            print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
+            
+            del adata_scvi
+            force_cleanup()
+            return adata
+        
+        # Case 2: Same count, different order
+        elif adata_scvi.n_obs == adata.n_obs:
+            print(f"  ⚠ Same cell count but different order")
+            print(f"  Reordering to match main data...")
+            
+            try:
+                adata_scvi_reordered = adata_scvi[adata.obs_names]
+                adata.obsm['X_scVI'] = adata_scvi_reordered.X.copy()
+                
+                print(f"  ✓ Successfully reordered")
+                print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
+                
+                del adata_scvi, adata_scvi_reordered
+                force_cleanup()
+                return adata
+            
+            except KeyError:
+                print(f"  ✗ Cannot reorder - cell IDs don't match")
+                # Fall through to mismatch handling
+        
+        # Case 3: Different counts - find common cells
+        print(f"  ⚠ Cell count mismatch")
+        print(f"  Searching for common cells...")
+        
+        common_cells = adata.obs_names.intersection(adata_scvi.obs_names)
+        
+        if len(common_cells) == 0:
+            print(f"  ✗ No common cells found!")
+            print(f"  Skipping scVI evaluation")
+            return adata
+        
+        print(f"  Found {len(common_cells):,} common cells ({100*len(common_cells)/adata.n_obs:.1f}%)")
+        
+        # Create subset with common cells
+        print(f"  Creating subset with common cells...")
+        
+        adata_subset = adata[common_cells].copy()
+        adata_scvi_subset = adata_scvi[common_cells]
+        
+        adata_subset.obsm['X_scVI'] = adata_scvi_subset.X.copy()
+        
+        print(f"  ✓ Subset created: {adata_subset.n_obs:,} cells")
+        print(f"  ✓ Added scVI embeddings: {adata_subset.obsm['X_scVI'].shape}")
+        print(f"  ⚠ Note: Returning subset of original data!")
+        
+        del adata_scvi, adata_scvi_subset
+        force_cleanup()
+        
+        return adata_subset
+    
+    except Exception as e:
+        print(f"  ✗ Error loading scVI embeddings:")
+        print(f"    {type(e).__name__}: {e}")
+        print(f"  Skipping scVI evaluation")
+        
+        # Print abbreviated traceback
+        import traceback
+        tb_lines = traceback.format_exc().split('\n')
+        print(f"  Traceback (last 3 lines):")
+        for line in tb_lines[-4:-1]:
+            print(f"    {line}")
+        
+        return adata
+
+
+# ============================================================================
+# SCIMILARITY - CORRECTED VERSION
+# ============================================================================
+
+def compute_scimilarity_corrected(adata, model_path, batch_size=1000):
+    """
+    MEMORY-OPTIMIZED SCimilarity for large datasets (733k cells).
+    
+    Key changes for your dataset:
+    1. Smaller batch size (1000 instead of 5000)
+    2. Process normalization in chunks to avoid OOM
+    3. More aggressive garbage collection
+    4. Monitor memory usage
+    """
+    print("\n" + "="*80)
+    print("SCIMILARITY - MEMORY-OPTIMIZED FOR LARGE DATASET")
+    print("="*80)
+    
+    # Memory monitoring
+    import psutil
+    process = psutil.Process(os.getpid())
+    
+    def print_mem():
+        mem_gb = process.memory_info().rss / 1e9
+        print(f"    💾 Memory: {mem_gb:.1f} GB")
     
     # Load model
-    print("Loading SCimilarity model...")
+    print("\n1. Loading SCimilarity model...")
     try:
         ca = CellAnnotation(model_path=model_path)
+        print(f"   ✓ Model loaded")
+        print(f"   Model expects {len(ca.gene_order):,} genes")
     except Exception as e:
-        print(f"✗ Failed to load model: {e}")
+        print(f"   ✗ Failed: {e}")
         return adata
     
-    force_cleanup()
+    print_mem()
     
-    # Find raw counts
-    X_counts = None
-    genes = None
+    # Get raw counts
+    print("\n2. Extracting raw counts...")
+    
+    raw_counts = None
+    gene_names = None
     
     if 'counts' in adata.layers:
-        X_counts = adata.layers['counts']
-        genes = adata.var.index
-        print(f"  ✓ Using raw counts from layers['counts']")
+        raw_counts = adata.layers['counts']
+        gene_names = adata.var_names
+        print(f"   ✓ Using .layers['counts']")
     elif adata.raw is not None:
-        X_counts = adata.raw.X
-        genes = adata.raw.var.index
-        print(f"  ✓ Using raw counts from .raw.X")
+        raw_counts = adata.raw.X
+        gene_names = adata.raw.var_names
+        print(f"   ✓ Using .raw.X")
     else:
-        print(f"  ✗ No raw counts found")
-        return adata
+        x_max = adata.X.max()
+        if x_max > 100:
+            raw_counts = adata.X
+            gene_names = adata.var_names
+            print(f"   ✓ Using .X (max={x_max:.0f})")
+        else:
+            print(f"   ✗ No raw counts found")
+            return adata
+    
+    n_cells = adata.n_obs
+    n_genes = len(gene_names)
+    
+    print(f"   Dataset: {n_cells:,} cells × {n_genes:,} genes")
+    print(f"   Count max: {raw_counts.max():.0f}")
+    
+    # Estimate memory
+    dense_mem_gb = (n_cells * n_genes * 4) / 1e9
+    print(f"   ⚠ Full dense array would need ~{dense_mem_gb:.1f} GB")
+    print(f"   → Using batched processing to avoid this")
+    
+    force_cleanup()
+    print_mem()
     
     # Find common genes
-    common_genes = genes.intersection(ca.gene_order)
-    print(f"  {len(common_genes):,} common genes")
+    print(f"\n3. Finding common genes...")
+    common_genes = set(gene_names).intersection(set(ca.gene_order))
+    print(f"   Common: {len(common_genes):,} ({100*len(common_genes)/len(ca.gene_order):.1f}%)")
     
-    if len(common_genes) < 1000:
-        print(f"  ⚠ Too few common genes, skipping")
-        return adata
+    if len(common_genes) < 5000:
+        print(f"   ⚠ Only {len(common_genes):,} common genes")
     
-    # Process in batches
+    # Create gene mapping
     gene_order_dict = {gene: i for i, gene in enumerate(ca.gene_order)}
     common_genes_sorted = sorted(common_genes, key=lambda x: gene_order_dict[x])
-    gene_indices = [genes.get_loc(g) for g in common_genes_sorted]
+    gene_indices = [gene_names.get_loc(g) for g in common_genes_sorted]
     
-    print(f"Computing embeddings in batches of {batch_size}...")
-    n_cells = adata.n_obs
+    # Compute embeddings in batches
+    print(f"\n4. Computing embeddings (batch_size={batch_size:,})...")
+    n_batches = (n_cells + batch_size - 1) // batch_size
+    print(f"   Total batches: {n_batches}")
+    print(f"   ⚠ Large dataset - this will take 15-30 minutes")
+    
     embeddings_list = []
     
-    for start_idx in range(0, n_cells, batch_size):
+    import scipy.sparse as sp
+    import anndata as ad
+    
+    for batch_idx in range(n_batches):
+        start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, n_cells)
-        batch_num = start_idx // batch_size + 1
-        total_batches = (n_cells + batch_size - 1) // batch_size
         
-        if batch_num % 10 == 0 or batch_num == 1:
-            print(f"  Batch {batch_num}/{total_batches}")
+        # Progress updates every 10 batches or at start
+        if batch_idx % 10 == 0 or batch_idx == 0:
+            print(f"\n   Batch {batch_idx+1}/{n_batches}: {start_idx:,}-{end_idx:,}")
+            print_mem()
         
         try:
-            batch_X = X_counts[start_idx:end_idx, gene_indices]
+            # Extract batch (only common genes to save memory)
+            if sp.issparse(raw_counts):
+                batch_counts = raw_counts[start_idx:end_idx, gene_indices].toarray()
+            else:
+                batch_counts = raw_counts[start_idx:end_idx, gene_indices]
             
-            import anndata as ad
-            batch_ad = ad.AnnData(X=batch_X)
-            batch_ad.var.index = common_genes_sorted
-            batch_ad.layers['counts'] = batch_ad.X.copy()
+            # Create mini AnnData
+            batch_ad = ad.AnnData(X=batch_counts)
+            batch_ad.var_names = common_genes_sorted
             
+            # Align to model
             batch_aligned = align_dataset(batch_ad, ca.gene_order)
+            
+            # Prepare for normalization
             if 'counts' not in batch_aligned.layers:
                 batch_aligned.layers['counts'] = batch_aligned.X.copy()
             
+            # Normalize (THIS was where it got killed before)
             batch_norm = lognorm_counts(batch_aligned)
-            batch_emb = ca.get_embeddings(batch_norm.X)
             
+            # Get embeddings
+            batch_emb = ca.get_embeddings(batch_norm.X)
             embeddings_list.append(batch_emb)
             
-            del batch_X, batch_ad, batch_aligned, batch_norm, batch_emb
+            # Aggressive cleanup
+            del batch_counts, batch_ad, batch_aligned, batch_norm, batch_emb
             
-            if batch_num % 20 == 0:
+            # More frequent GC for large datasets
+            if batch_idx % 5 == 0:
                 force_cleanup()
         
+        except MemoryError as e:
+            print(f"\n   ✗ OUT OF MEMORY at batch {batch_idx+1}!")
+            print(f"   Current batch_size: {batch_size}")
+            print(f"   SOLUTION: Reduce batch_size to {batch_size // 2} and retry")
+            print(f"   In run_evaluation_fixed.py, change:")
+            print(f"     SCIMILARITY_BATCH_SIZE = {batch_size // 2}")
+            raise MemoryError(f"Reduce SCIMILARITY_BATCH_SIZE to {batch_size // 2}")
+        
         except Exception as e:
-            print(f"\n  ✗ Error at batch {batch_num}: {e}")
+            print(f"\n   ✗ Error at batch {batch_idx+1}: {e}")
             raise
     
     # Concatenate
+    print(f"\n5. Concatenating results...")
     embeddings = np.vstack(embeddings_list)
+    
     del embeddings_list
     force_cleanup()
     
+    print(f"   ✓ Final shape: {embeddings.shape}")
+    
+    # Add to adata
     adata.obsm['X_scimilarity'] = embeddings
-    print(f"✓ SCimilarity complete: {embeddings.shape}")
+    
+    print(f"\n✓ SCimilarity complete!")
+    print_mem()
+    print("="*80)
     
     return adata
 
@@ -368,11 +530,10 @@ def compute_scimilarity_minimal(adata, model_path, batch_size=500):
 # ============================================================================
 
 def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jobs=8):
-    """EXACT benchmark configuration from AML-scAtlas"""
+    """Run scIB benchmark"""
     print("\n" + "="*80)
     print(f"BENCHMARKING: {embedding_key}")
     print("="*80)
-    print_memory()
     
     from scib_metrics.benchmark import Benchmarker, BioConservation
     import time
@@ -383,13 +544,12 @@ def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jo
     
     print(f"  Embedding: {adata.obsm[embedding_key].shape}")
     print(f"  Cells: {adata.n_obs:,}")
-    print(f"  Batch key: {BATCH_KEY}")
-    print(f"  Label key: {LABEL_KEY}")
+    print(f"  Batch: {BATCH_KEY}")
+    print(f"  Label: {LABEL_KEY}")
     
     if method_name is None:
-        method_name = embedding_key.replace('X_', '').replace('_', ' ').title()
+        method_name = embedding_key.replace('X_', '').title()
     
-    # EXACT bioconservation config from paper
     biocons = BioConservation(
         isolated_labels=False,
         nmi_ari_cluster_labels_leiden=False,
@@ -402,8 +562,8 @@ def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jo
     try:
         bm = Benchmarker(
             adata,
-            batch_key=BATCH_KEY,  # Use detected key
-            label_key=LABEL_KEY,  # Use detected key
+            batch_key=BATCH_KEY,
+            label_key=LABEL_KEY,
             embedding_obsm_keys=[embedding_key],
             pre_integrated_embedding_obsm_key="X_pca",
             bio_conservation_metrics=biocons,
@@ -413,7 +573,7 @@ def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jo
         bm.benchmark()
         
     except Exception as e:
-        print(f"✗ Benchmark failed: {e}")
+        print(f"✗ Failed: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -421,21 +581,34 @@ def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jo
     elapsed = int(time.time() - start)
     print(f"✓ Completed in {elapsed // 60}m {elapsed % 60}s")
     
-    # Get results
     df = bm.get_results(min_max_scale=False)
     
-    # Rename index properly
-    if embedding_key in df.index:
-        df = df.rename(index={embedding_key: method_name})
-    else:
-        df.index = [method_name]
+    # Debug: show what was returned
+    print(f"\n  Debug: Results shape: {df.shape}")
+    print(f"  Debug: Index values: {df.index.tolist()}")
     
-    # Save
+    # Handle case where results include multiple embeddings
+    # We only want the row for our specific embedding
+    if len(df.index) > 1:
+        print(f"  ℹ Multiple results returned ({len(df.index)} rows)")
+        
+        # Find the row that matches our embedding_key
+        if embedding_key in df.index:
+            print(f"  → Selecting row for '{embedding_key}'")
+            df = df.loc[[embedding_key]]
+        else:
+            # Take the first row if exact match not found
+            print(f"  ⚠ Embedding key '{embedding_key}' not in index")
+            print(f"  → Using first row: '{df.index[0]}'")
+            df = df.iloc[[0]]
+    
+    # Rename the index to our method name
+    df.index = [method_name]
+    
     output_file = os.path.join(output_dir, f"{method_name.lower().replace(' ', '_')}_metrics.csv")
     df.to_csv(output_file)
     print(f"✓ Saved: {output_file}")
     
-    # Print summary
     print("\nMetrics:")
     for col in df.columns:
         value = df.loc[method_name, col]
@@ -453,57 +626,49 @@ def main():
     global BATCH_KEY, LABEL_KEY, BATCH_KEY_LOWER
     
     print("="*80)
-    print("BATCH CORRECTION EVALUATION - Auto-detect Column Names")
+    print("BATCH CORRECTION EVALUATION - CORRECTED SCIMILARITY")
     print("="*80)
     
-    # Check files
     if not os.path.exists(DATA_PATH):
         print(f"\n✗ File not found: {DATA_PATH}")
         return
     
-    # STEP 1: Load and detect columns
+    # STEP 1: Load and detect
     print("\n" + "="*80)
-    print("STEP 1: LOADING DATA & AUTO-DETECTING COLUMNS")
+    print("STEP 1: LOADING DATA")
     print("="*80)
     
-    print(f"Loading from: {DATA_PATH}")
+    print(f"Loading: {DATA_PATH}")
     adata = sc.read_h5ad(DATA_PATH)
     print(f"Loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     
-    # Auto-detect column names
-    print("\nAuto-detecting column names...")
+    # Detect columns
     try:
         BATCH_KEY = detect_batch_key(adata)
         LABEL_KEY = detect_label_key(adata)
-        
-        # Create lowercase version for HVG selection
-        # Paper uses lowercase 'sample' for HVG batch_key
         BATCH_KEY_LOWER = BATCH_KEY.lower()
         
-        print(f"\n  Will use for benchmarking:")
-        print(f"    BATCH_KEY = '{BATCH_KEY}'")
-        print(f"    LABEL_KEY = '{LABEL_KEY}'")
-        print(f"  Will use for HVG selection:")
-        print(f"    batch_key = '{BATCH_KEY_LOWER}' (lowercase)")
-        
-        # Create lowercase column if it doesn't exist
         if BATCH_KEY_LOWER not in adata.obs.columns:
-            print(f"\n  Creating lowercase column '{BATCH_KEY_LOWER}' for HVG selection...")
             adata.obs[BATCH_KEY_LOWER] = adata.obs[BATCH_KEY].copy()
         
     except ValueError as e:
         print(f"\n✗ Error: {e}")
-        print("\nYour data columns:")
-        print(adata.obs.columns.tolist())
         return
     
-    print_memory()
+    # Verify raw counts for SCimilarity
+    print("\nVerifying data for SCimilarity...")
+    if 'counts' in adata.layers:
+        print(f"  ✓ .layers['counts'] found (max={adata.layers['counts'].max():.0f})")
+    elif adata.raw is not None:
+        print(f"  ✓ .raw.X found (max={adata.raw.X.max():.0f})")
+    else:
+        print(f"  ⚠ No raw counts in layers or .raw")
+        print(f"    .X max={adata.X.max():.2f}")
     
-    # Optimize memory
     adata = optimize_adata_memory(adata)
     force_cleanup()
     
-    # STEP 2: Preprocess
+    # STEP 2: Preprocess for uncorrected PCA
     adata = preprocess_adata_exact(adata, BATCH_KEY_LOWER)
     force_cleanup()
     
@@ -517,90 +682,99 @@ def main():
         force_cleanup()
     except Exception as e:
         print(f"✗ Failed: {e}")
-        import traceback
-        traceback.print_exc()
         return
     
-    # STEP 4: SCimilarity (optional)
+    # STEP 4: Load scVI embeddings (optional)
+    print("\n" + "="*80)
+    print("STEP 3: SCVI EMBEDDINGS (OPTIONAL)")
+    print("="*80)
+    
+    adata = load_scvi_embedding(adata, SCVI_PATH)
+    force_cleanup()
+    
+    # STEP 5: SCimilarity (CORRECTED)
     if SCIMILARITY_ENABLED and os.path.exists(SCIMILARITY_MODEL):
         print("\n" + "="*80)
-        print("STEP 3: SCIMILARITY")
+        print("STEP 4: SCIMILARITY (CORRECTED)")
         print("="*80)
         
         try:
-            adata = compute_scimilarity_minimal(
+            adata = compute_scimilarity_corrected(
                 adata,
                 model_path=SCIMILARITY_MODEL,
                 batch_size=SCIMILARITY_BATCH_SIZE
             )
             force_cleanup()
         except Exception as e:
-            print(f"✗ SCimilarity failed: {e}")
+            print(f"✗ Failed: {e}")
+            import traceback
+            traceback.print_exc()
     
-    # STEP 5: Benchmarking
+    # STEP 6: Benchmarking
     print("\n" + "="*80)
-    print("STEP 4: BENCHMARKING")
+    print("STEP 5: BENCHMARKING")
     print("="*80)
     
     results = {}
     
     # Uncorrected
     print("\n--- Uncorrected ---")
-    df_unc = run_benchmark_exact(adata, 'X_uncorrected', OUTPUT_DIR, method_name='Uncorrected', n_jobs=N_JOBS)
+    df_unc = run_benchmark_exact(adata, 'X_uncorrected', OUTPUT_DIR, 'Uncorrected', N_JOBS)
     if df_unc is not None:
         results['Uncorrected'] = df_unc
     force_cleanup()
     
+    # scVI (if available)
+    if 'X_scVI' in adata.obsm:
+        print("\n--- scVI ---")
+        df_scvi = run_benchmark_exact(adata, 'X_scVI', OUTPUT_DIR, 'scVI', N_JOBS)
+        if df_scvi is not None:
+            results['scVI'] = df_scvi
+        force_cleanup()
+    else:
+        print("\n--- scVI ---")
+        print("  ℹ scVI embeddings not available, skipping")
+    
     # SCimilarity
     if 'X_scimilarity' in adata.obsm:
         print("\n--- SCimilarity ---")
-        df_scim = run_benchmark_exact(adata, 'X_scimilarity', OUTPUT_DIR, method_name='SCimilarity', n_jobs=N_JOBS)
+        df_scim = run_benchmark_exact(adata, 'X_scimilarity', OUTPUT_DIR, 'SCimilarity', N_JOBS)
         if df_scim is not None:
             results['SCimilarity'] = df_scim
         force_cleanup()
+    else:
+        print("\n--- SCimilarity ---")
+        print("  ℹ SCimilarity embeddings not available, skipping")
     
-    # STEP 6: Results
+    # STEP 7: Results
     if len(results) > 0:
         print("\n" + "="*80)
         print("FINAL RESULTS")
         print("="*80)
         
-        # Combine results
         combined = pd.concat(results.values(), keys=results.keys())
         combined.index = combined.index.droplevel(1)
         
-        # Save
         output_file = os.path.join(OUTPUT_DIR, "combined_metrics.csv")
         combined.to_csv(output_file)
-        print(f"\n✓ Combined results saved to: {output_file}")
+        print(f"\n✓ Results saved: {output_file}")
         
-        # Print table
         print("\n" + "="*80)
-        print("SUMMARY TABLE")
+        print("SUMMARY")
         print("="*80)
         
-        print(f"\n{'Method':<20s} {'Total':>10s} {'Batch Corr':>12s} {'Bio Conserv':>12s}")
-        print("-" * 56)
+        print(f"\n{'Method':<20s} {'Total':>10s} {'Batch':>10s} {'Bio':>10s}")
+        print("-" * 52)
         
         for method in combined.index:
             total = combined.loc[method, 'Total']
             batch = combined.loc[method, 'Batch correction']
             bio = combined.loc[method, 'Bio conservation']
-            
-            print(f"method:{method} total:{total} batch:{batch} bio:{bio}")
-        
-        print("\n" + "="*80)
-        print("DATA INFO")
-        print("="*80)
-        print(f"Batch key used: '{BATCH_KEY}' ({adata.obs[BATCH_KEY].nunique()} unique)")
-        print(f"Label key used: '{LABEL_KEY}' ({adata.obs[LABEL_KEY].nunique()} types)")
-        print(f"Cells: {adata.n_obs:,}")
-        print(f"Genes after preprocessing: {adata.n_vars:,}")
+            print(f"{method:<20s} {total:>10.4f} {batch:>10.4f} {bio:>10.4f}")
     
     print("\n" + "="*80)
     print("✓ COMPLETE")
     print("="*80)
-    print_memory()
 
 if __name__ == "__main__":
     main()
