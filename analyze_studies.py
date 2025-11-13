@@ -16,13 +16,14 @@ import pandas as pd
 import numpy as np
 
 # Technology mapping based on literature
+# Note: These keys must match the exact study names in adata.obs['Study']
 TECHNOLOGY_MAP = {
-    'van_galen': {
+    'van_galen_2019': {
         'tech': 'Seq-Well',
         'category': 'microwell',
         'description': 'Seq-Well method (barcoded bead-based, physical wells)'
     },
-    'naldini_2023': {
+    'naldini': {
         'tech': 'SMART-Seq v4',
         'category': 'well-based',
         'description': 'SMART-Seq v4 (plate-based, full-length)'
@@ -256,6 +257,9 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("✓ ANALYSIS COMPLETE")
     print("="*80)
+    print("\nData notes:")
+    print("  • Raw counts available in adata.layers['counts']")
+    print("  • This will be used for uncorrected baseline and SCimilarity")
     print("\nNext steps:")
     print("1. Review study_analysis_results.csv")
     print("2. Run experiment_cross_mechanism.py")
