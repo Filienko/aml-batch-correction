@@ -307,8 +307,34 @@ def load_scvi_embedding(adata, scvi_path="data/AML_scAtlas_X_scVI.h5ad"):
             
             except KeyError:
                 print(f"  ✗ Cannot reorder - cell IDs don't match")
+                print(f"  ℹ Checking if IDs are just numeric indices...")
+
+                # Case 2b: Same count, IDs don't match, but might be in same order
+                # This happens when scVI file has numeric indices ('0', '1', '2')
+                # but main data has cell barcodes
+                try:
+                    # Check if scVI IDs are just numeric indices
+                    scvi_ids_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
+
+                    if scvi_ids_numeric:
+                        print(f"  ✓ scVI file uses numeric indices")
+                        print(f"  ℹ Assuming embeddings are in same order as main data")
+                        print(f"  ⚠ WARNING: This assumes scVI embeddings were computed on same data in same order!")
+
+                        # Trust the order and copy directly
+                        adata.obsm['X_scVI'] = adata_scvi.X.copy()
+
+                        print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
+
+                        del adata_scvi
+                        force_cleanup()
+                        return adata
+
+                except Exception as e:
+                    print(f"  ℹ Could not verify numeric indices: {e}")
+                    pass
                 # Fall through to mismatch handling
-        
+
         # Case 3: Different counts - find common cells
         print(f"  ⚠ Cell count mismatch")
         print(f"  Searching for common cells...")
