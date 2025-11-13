@@ -260,15 +260,16 @@ def compute_scimilarity_embedding(
         # Use full gene set (recommended to avoid gene overlap issues)
         if adata.raw is None:
             print("  No .raw attribute found, using main object")
-            adata_full.X = adata_full.layers['counts'].copy()
             adata_full = adata.copy()
+            if 'counts' in adata_full.layers:
+                adata_full.X = adata_full.layers['counts'].copy()
         else:
             print("  Using .raw attribute for full gene set")
             # Don't convert to full AnnData yet - work with view to save memory
             adata_full = adata.raw.to_adata()
             if adata_full.X.max() < 100:
-                if 'counts' in adata.layers:
-                    adata_full.X = adata.layers['counts'].copy()
+                if 'counts' in adata_full.layers:
+                    adata_full.X = adata_full.layers['counts'].copy()
     else:
         if 'highly_variable' in adata.var.columns:
             print(f"  Using 'highly_variable' genes (use_full_gene_set=False)")
@@ -331,7 +332,11 @@ def compute_scimilarity_embedding(
             print(f"      Aligning genes...", end='', flush=True)
             batch_aligned = align_dataset(batch_adata, ca.gene_order)
             print(f" {batch_aligned.shape}", flush=True)
-            
+
+            # Ensure counts layer exists for normalization
+            if 'counts' not in batch_aligned.layers:
+                batch_aligned.layers['counts'] = batch_aligned.X.copy()
+
             # Normalize
             print(f"      Normalizing...", end='', flush=True)
             batch_norm = lognorm_counts(batch_aligned)
