@@ -337,16 +337,39 @@ def load_scvi_embedding(adata, scvi_path="data/AML_scAtlas_X_scVI.h5ad"):
                     pass
                 # Fall through to mismatch handling
 
-        # Case 3: Different counts - find common cells
+        # Case 3: Different counts - find common cells OR use numeric indices
         print(f"  ⚠ Cell count mismatch")
         print(f"  Searching for common cells...")
-        
+
         common_cells = adata.obs_names.intersection(adata_scvi.obs_names)
-        
+
         if len(common_cells) == 0:
-            print(f"  ✗ No common cells found!")
-            print(f"  Skipping scVI evaluation")
-            return adata
+            print(f"  ✗ No common cells found by name matching")
+
+            # Check if scVI uses numeric indices (common when computed on full data)
+            print(f"  ℹ Checking if scVI file uses numeric indices...")
+            scvi_ids_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
+
+            if scvi_ids_numeric:
+                print(f"  ✓ scVI file uses numeric indices")
+                print(f"  ⚠ scVI: {adata_scvi.n_obs:,} cells, Current: {adata.n_obs:,} cells")
+                print(f"")
+                print(f"  ✗ CANNOT LOAD: scVI was computed on full dataset,")
+                print(f"    but current data is a SUBSET (e.g., specific studies only).")
+                print(f"")
+                print(f"  SOLUTIONS:")
+                print(f"    1. Compute scVI on this specific subset, OR")
+                print(f"    2. Run scVI on full data first, then subset BOTH,")
+                print(f"    3. Use scVI only for full-dataset experiments")
+                print(f"")
+                print(f"  Skipping scVI for this experiment.")
+                del adata_scvi
+                force_cleanup()
+                return adata
+            else:
+                print(f"  ✗ Cannot match cells - different naming and counts")
+                print(f"  Skipping scVI evaluation")
+                return adata
         
         print(f"  Found {len(common_cells):,} common cells ({100*len(common_cells)/adata.n_obs:.1f}%)")
         
