@@ -18,55 +18,86 @@ import numpy as np
 # Technology mapping based on literature
 # Note: These keys must match the exact study names in adata.obs['Study']
 TECHNOLOGY_MAP = {
+    # Non-droplet technologies
     'van_galen_2019': {
         'tech': 'Seq-Well',
-        'category': 'microwell',
-        'description': 'Seq-Well method (barcoded bead-based, physical wells)'
+        'category': 'non-droplet',
+        'subcategory': 'microwell',
+        'description': 'Seq-Well (barcoded bead-based, physical nanowells)'
     },
+    'zhai_2022': {
+        'tech': 'SORT-Seq',
+        'category': 'non-droplet',
+        'subcategory': 'FACS-based',
+        'description': 'SORT-Seq (FACS-based single-cell RNA-seq)'
+    },
+    'pei_2020': {
+        'tech': '10X Genomics CITEseq',
+        'category': 'non-droplet',
+        'subcategory': 'multimodal',
+        'description': '10X Genomics CITEseq (droplet platform + protein measurements)'
+    },
+    'velten_2021': {
+        'tech': 'Muta-Seq',
+        'category': 'non-droplet',
+        'subcategory': 'mutation-tracking',
+        'description': 'Muta-Seq (mutation tracking + transcriptomics)'
+    },
+
+    # Droplet-based technologies (10x Genomics Chromium)
     'naldini': {
-        'tech': 'SMART-Seq v4',
-        'category': 'well-based',
-        'description': 'SMART-Seq v4 (plate-based, full-length)'
+        'tech': '10x Genomics Chromium',
+        'category': 'droplet',
+        'subcategory': '10x-chromium',
+        'description': '10x Genomics Chromium (regular droplet-based)'
     },
     'oetjen_2018': {
         'tech': '10x Genomics Single Cell 3′',
         'category': 'droplet',
-        'description': 'Droplet-based, 10x Genomics Single Cell 3′ Solution'
+        'subcategory': '10x-chromium',
+        'description': '10x Genomics Single Cell 3′ Solution (~80k cells)'
     },
     'beneyto-calabuig-2023': {
         'tech': '10x Genomics Chromium Single Cell 3′',
         'category': 'droplet',
+        'subcategory': '10x-chromium',
         'description': '10x Genomics Chromium Single Cell 3′ Solution'
     },
     'jiang_2020': {
         'tech': '10x Genomics Chromium Single Cell 3′',
         'category': 'droplet',
-        'description': '10x Genomics Chromium Single Cell 3′ (droplet-based)'
+        'subcategory': '10x-chromium',
+        'description': '10x Genomics Chromium Single Cell 3′'
     },
     'zheng_2017': {
         'tech': '10x Genomics GemCode Single-Cell 3′',
         'category': 'droplet',
+        'subcategory': '10x-chromium',
         'description': '10x Genomics GemCode Single-Cell 3′ solution'
     },
     'setty_2019': {
         'tech': '10x Chromium',
         'category': 'droplet',
+        'subcategory': '10x-chromium',
         'description': '10x Chromium'
     },
     'petti_2019': {
         'tech': '10x Genomics Chromium Single Cell 5′',
         'category': 'droplet',
-        'description': '10x Genomics Chromium Single Cell 5′ Gene Expression workflow'
+        'subcategory': '10x-chromium',
+        'description': '10x Genomics Chromium Single Cell 5′ Gene Expression'
     },
     'mumme_2023': {
         'tech': '10x Genomics Chromium',
         'category': 'droplet',
+        'subcategory': '10x-chromium',
         'description': '10x Genomics Chromium (3′ v3 and 5′ v1); NovaSeq'
     },
     'zhang_2023': {
         'tech': '10x Genomics Chromium',
         'category': 'droplet',
-        'description': '10x Genomics Chromium Controller; NovaSeq'
+        'subcategory': '10x-chromium',
+        'description': '10x Genomics Chromium Controller; NovaSeq (~80k cells)'
     }
 }
 
@@ -178,33 +209,32 @@ def analyze_dataset(data_path="data/AML_scAtlas.h5ad"):
 
     # Experiment 1: Cross-mechanism
     print("\n1. CROSS-MECHANISM BATCH CORRECTION")
-    print("   Compare batch correction across different technologies\n")
+    print("   Compare batch correction across different technologies")
+    print("   (Non-droplet vs Droplet-based)\n")
 
-    microwell = df[df['Category'] == 'microwell']
-    wellbased = df[df['Category'] == 'well-based']
-    droplet = df[df['Category'] == 'droplet']
+    non_droplet = df[df['Category'] == 'non-droplet'].sort_values('N_cells', ascending=False)
+    droplet = df[df['Category'] == 'droplet'].sort_values('N_cells', ascending=False)
 
     print("   Selected studies:")
 
-    if not microwell.empty:
-        study = microwell.iloc[0]
-        print(f"   • Microwell: {study['Study_ID']} ({study['N_cells']:,} cells)")
+    # Select all non-droplet studies (we don't have many)
+    if not non_droplet.empty:
+        print(f"\n   Non-droplet technologies ({len(non_droplet)} studies):")
+        for idx, row in non_droplet.iterrows():
+            print(f"   • {row['Study_ID']}: {row['Technology']} - {row['N_cells']:,} cells")
 
-    if not wellbased.empty:
-        study = wellbased.iloc[0]
-        print(f"   • Well-based: {study['Study_ID']} ({study['N_cells']:,} cells)")
-
+    # Select largest 2-3 droplet studies for balance
     if not droplet.empty:
-        # Pick the largest droplet-based study
-        study = droplet.iloc[0]
-        print(f"   • Droplet: {study['Study_ID']} ({study['N_cells']:,} cells) [LARGEST]")
+        print(f"\n   Droplet technologies (selecting largest 2-3 from {len(droplet)} studies):")
+        for idx, row in droplet.head(3).iterrows():
+            print(f"   • {row['Study_ID']}: {row['N_cells']:,} cells")
 
     total_cells_cross = (
-        (microwell.iloc[0]['N_cells'] if not microwell.empty else 0) +
-        (wellbased.iloc[0]['N_cells'] if not wellbased.empty else 0) +
-        (droplet.iloc[0]['N_cells'] if not droplet.empty else 0)
+        non_droplet['N_cells'].sum() if not non_droplet.empty else 0
+    ) + (
+        droplet.head(3)['N_cells'].sum() if not droplet.empty else 0
     )
-    print(f"\n   Total cells: {total_cells_cross:,}")
+    print(f"\n   Total cells (approx): {total_cells_cross:,}")
 
     # Experiment 2: Within-mechanism
     print("\n2. WITHIN-MECHANISM BATCH CORRECTION (Droplet-based only)")
@@ -230,16 +260,15 @@ def analyze_dataset(data_path="data/AML_scAtlas.h5ad"):
     print("EXPERIMENT CONFIGURATION")
     print("="*80)
 
-    # Cross-mechanism config
+    # Cross-mechanism config: all non-droplet + largest 3 droplet
     cross_mechanism_studies = []
-    if not microwell.empty:
-        cross_mechanism_studies.append(microwell.iloc[0]['Actual_Study_Name'])
-    if not wellbased.empty:
-        cross_mechanism_studies.append(wellbased.iloc[0]['Actual_Study_Name'])
+    if not non_droplet.empty:
+        cross_mechanism_studies.extend(non_droplet['Actual_Study_Name'].tolist())
     if not droplet.empty:
-        cross_mechanism_studies.append(droplet.iloc[0]['Actual_Study_Name'])
+        # Add largest 3 droplet studies to balance with non-droplet
+        cross_mechanism_studies.extend(droplet.head(3)['Actual_Study_Name'].tolist())
 
-    # Within-mechanism config
+    # Within-mechanism config: all droplet studies
     within_mechanism_studies = droplet['Actual_Study_Name'].tolist() if not droplet.empty else []
 
     print("\nCross-mechanism experiment studies:")
@@ -247,6 +276,25 @@ def analyze_dataset(data_path="data/AML_scAtlas.h5ad"):
 
     print("\nWithin-mechanism experiment studies:")
     print(f"WITHIN_MECHANISM_STUDIES = {within_mechanism_studies}")
+
+    # Check for size imbalances
+    print("\n" + "="*80)
+    print("SIZE BALANCE WARNING")
+    print("="*80)
+
+    if not non_droplet.empty and not droplet.empty:
+        non_droplet_total = non_droplet['N_cells'].sum()
+        droplet_top3_total = droplet.head(3)['N_cells'].sum()
+
+        print(f"\nCross-mechanism experiment:")
+        print(f"  Non-droplet total: {non_droplet_total:,} cells ({len(non_droplet)} studies)")
+        print(f"  Droplet total (top 3): {droplet_top3_total:,} cells")
+
+        ratio = max(non_droplet_total, droplet_top3_total) / min(non_droplet_total, droplet_top3_total)
+        if ratio > 3:
+            print(f"  ⚠ WARNING: {ratio:.1f}x imbalance!")
+            print(f"     Consider downsampling the larger group or upweighting smaller studies")
+            print(f"     in the batch correction evaluation.")
 
     return df, cross_mechanism_studies, within_mechanism_studies
 

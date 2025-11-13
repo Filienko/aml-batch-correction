@@ -3,14 +3,17 @@
 Experiment 1: Cross-Mechanism Batch Correction
 
 Tests batch correction performance across different scRNA-seq technologies:
-- Microwell-based: van_galen (Seq-Well)
-- Well-based (plate): naldini_2023 (SMART-Seq v4)
-- Droplet-based: largest 10x dataset
+- Non-droplet technologies: Seq-Well, SORT-Seq, CITEseq, Muta-Seq
+- Droplet-based technologies: 10x Genomics Chromium (top 3 largest studies)
 
 This is a harder problem than within-mechanism correction because:
-1. Different technologies have different biases and characteristics
-2. Gene detection rates vary significantly
+1. Different technologies have fundamentally different biases and characteristics
+2. Gene detection rates vary significantly across platforms
 3. Library prep differences create systematic variations
+4. Technical variation can be as large as biological variation
+
+Note: Study sizes vary considerably (2k to 80k cells per study), which may
+affect batch correction performance.
 """
 
 import os
@@ -124,18 +127,20 @@ def subset_to_cross_mechanism(adata, batch_key='Study'):
     print(f"\nSubset dataset: {adata_subset.n_obs:,} cells × {adata_subset.n_vars:,} genes")
     print(f"Studies in subset: {adata_subset.obs[batch_key].nunique()}")
 
-    # Show breakdown by study
+    # Show breakdown by study with technology classification
     print("\nCells per study:")
     study_counts = adata_subset.obs[batch_key].value_counts()
-    for study, count in study_counts.items():
-        tech_category = "Unknown"
-        if any(kw in study.lower() for kw in ['van_galen', 'van galen', 'vangalen']):
-            tech_category = "Microwell (Seq-Well)"
-        elif any(kw in study.lower() for kw in ['naldini', 'smart']):
-            tech_category = "Well-based (SMART-Seq)"
-        else:
-            tech_category = "Droplet (10x)"
 
+    # Technology mapping for display
+    tech_map = {
+        'van_galen_2019': 'Non-droplet (Seq-Well)',
+        'zhai_2022': 'Non-droplet (SORT-Seq)',
+        'pei_2020': 'Non-droplet (CITEseq)',
+        'velten_2021': 'Non-droplet (Muta-Seq)',
+    }
+
+    for study, count in study_counts.items():
+        tech_category = tech_map.get(study, "Droplet (10x Chromium)")
         print(f"  {study}: {count:,} cells [{tech_category}]")
 
     # Remove unused categories
@@ -154,9 +159,10 @@ def main():
     print("EXPERIMENT 1: CROSS-MECHANISM BATCH CORRECTION")
     print("="*80)
     print("\nObjective: Test batch correction across different scRNA-seq technologies")
-    print("  - Microwell-based (Seq-Well)")
-    print("  - Well-based (SMART-Seq v4)")
-    print("  - Droplet-based (10x Genomics)")
+    print("  - Non-droplet technologies: Seq-Well, SORT-Seq, CITEseq, Muta-Seq")
+    print("  - Droplet-based technologies: 10x Genomics Chromium (largest studies)")
+    print("\nNote: This tests whether batch correction methods can handle")
+    print("      fundamental technology differences, not just experimental batches.")
 
     # Check data file
     if not os.path.exists(DATA_PATH):

@@ -10,28 +10,36 @@ We conduct **two experiments** to understand how batch correction methods perfor
 **Goal**: Test batch correction across different scRNA-seq technologies.
 
 **Selected Technologies**:
-- **Microwell-based**: van_galen (Seq-Well method)
-- **Well-based (plate)**: naldini_2023 (SMART-Seq v4)
-- **Droplet-based**: Largest 10x Genomics dataset
+
+*Non-droplet technologies:*
+- **van_galen_2019**: Seq-Well (microwell-based) - ~20k cells
+- **zhai_2022**: SORT-Seq (FACS-based)
+- **pei_2020**: 10X CITEseq (multimodal) - ~2k cells
+- **velten_2021**: Muta-Seq (mutation tracking)
+
+*Droplet-based technologies:*
+- **Top 3 largest 10x Genomics studies** (e.g., oetjen_2018, zhang_2023 with ~80k cells each)
 
 **Why this is harder**:
 - Different technologies have fundamentally different biases
-- Gene detection rates vary significantly (SMART-Seq detects ~8000 genes/cell, 10x detects ~2000)
+- Gene detection rates vary significantly across platforms
 - Library preparation differences create systematic variations
 - Technical variation can be as large as biological variation
+- **Study size imbalance**: 2k to 80k cells per study
 
 ### Experiment 2: Within-Mechanism Batch Correction
 **Goal**: Test batch correction within the same technology (droplet-based only).
 
 **Selected Studies** (all 10x Genomics Chromium or similar):
-- oetjen_2018: 10x Genomics Single Cell 3′
+- naldini: 10x Genomics Chromium
+- oetjen_2018: 10x Genomics Single Cell 3′ (~80k cells)
 - beneyto-calabuig-2023: 10x Genomics Chromium Single Cell 3′
 - jiang_2020: 10x Genomics Chromium Single Cell 3′
 - zheng_2017: 10x Genomics GemCode Single-Cell 3′
 - setty_2019: 10x Chromium
 - petti_2019: 10x Genomics Chromium Single Cell 5′
 - mumme_2023: 10x Genomics Chromium (3′ v3 and 5′ v1)
-- zhang_2023: 10x Genomics Chromium
+- zhang_2023: 10x Genomics Chromium (~80k cells)
 
 **Why this is easier**:
 - Same core technology (droplet encapsulation)
@@ -43,26 +51,40 @@ We conduct **two experiments** to understand how batch correction methods perfor
 
 ## Technology Details
 
-### Microwell-based (Seq-Well)
+### Non-Droplet Technologies
+
+#### Seq-Well (van_galen_2019)
 - **Mechanism**: Barcoded beads in physical nanowells
 - **Throughput**: 10,000s of cells
 - **Depth**: ~5,000 UMIs/cell, ~2,000 genes/cell
 - **Advantages**: Lower cost than droplet, simpler setup
-- **Study**: van_galen
+- **Size**: ~20k cells
 
-### Well-based (SMART-Seq v4)
-- **Mechanism**: Plate-based full-length sequencing
-- **Throughput**: 100s of cells per plate
-- **Depth**: Very high (~1M UMIs/cell, ~8,000 genes/cell)
-- **Advantages**: Full transcript coverage, best for isoform analysis
-- **Study**: naldini_2023
+#### SORT-Seq (zhai_2022)
+- **Mechanism**: FACS-based single-cell RNA-seq
+- **Throughput**: Low-medium
+- **Advantages**: Can sort based on surface markers
+- **Size**: TBD from data
+
+#### CITEseq (pei_2020)
+- **Mechanism**: 10x platform + antibody-derived tags for protein measurement
+- **Throughput**: High (10x-based)
+- **Advantages**: Multimodal (RNA + protein)
+- **Size**: ~2k cells (smallest study)
+
+#### Muta-Seq (velten_2021)
+- **Mechanism**: Mutation tracking + transcriptomics
+- **Throughput**: Medium
+- **Advantages**: Links mutations to transcriptional states
+- **Size**: TBD from data
 
 ### Droplet-based (10x Genomics)
 - **Mechanism**: Microfluidic droplet encapsulation
 - **Throughput**: 10,000s-100,000s of cells
 - **Depth**: Medium (~10,000 UMIs/cell, ~2,000 genes/cell)
 - **Advantages**: High throughput, standard protocol, widely used
-- **Studies**: 8 studies included
+- **Studies**: 9 studies included (naldini + 8 others)
+- **Size range**: Variable (some up to ~80k cells per study)
 
 ---
 
