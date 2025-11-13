@@ -554,6 +554,75 @@ def compute_scimilarity_corrected(adata, model_path, batch_size=1000):
     return adata
 
 # ============================================================================
+# HARMONY BATCH CORRECTION
+# ============================================================================
+
+def compute_harmony_corrected(adata, batch_key, n_jobs=8):
+    """
+    Compute Harmony batch correction.
+
+    Harmony is a fast integration method that works directly on PCA embeddings.
+    It iteratively adjusts principal components to remove batch effects while
+    preserving biological variation.
+
+    Reference: Korsunsky et al. (2019) Nature Methods
+    """
+    print("\n" + "="*80)
+    print("HARMONY BATCH CORRECTION")
+    print("="*80)
+    print_memory()
+
+    try:
+        # Harmony requires PCA as input
+        if 'X_pca' not in adata.obsm:
+            print("  ✗ X_pca not found! Run uncorrected PCA first.")
+            return adata
+
+        print(f"  Input: X_pca with shape {adata.obsm['X_pca'].shape}")
+        print(f"  Batch key: {batch_key}")
+        print(f"  Batches: {adata.obs[batch_key].nunique()}")
+
+        # Create working copy to avoid modifying the original
+        adata_work = adata.copy()
+
+        print("\n  Running Harmony integration...")
+        import time
+        start = time.time()
+
+        # Run Harmony
+        sc.external.pp.harmony_integrate(
+            adata_work,
+            batch_key,
+            basis='X_pca',
+            adjusted_basis='X_harmony',
+            max_iter_harmony=10,
+            verbose=False
+        )
+
+        elapsed = int(time.time() - start)
+        print(f"  ✓ Completed in {elapsed // 60}m {elapsed % 60}s")
+
+        # Copy result back to original adata
+        adata.obsm['X_harmony'] = adata_work.obsm['X_harmony'].copy()
+
+        print(f"  ✓ Harmony embedding: {adata.obsm['X_harmony'].shape}")
+
+        del adata_work
+        force_cleanup()
+
+        print("✓ Harmony complete!")
+        print_memory()
+
+        return adata
+
+    except Exception as e:
+        print(f"  ✗ Harmony failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return adata
+
+
+# ============================================================================
 # BENCHMARKING
 # ============================================================================
 

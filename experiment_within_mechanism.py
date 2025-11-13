@@ -42,6 +42,7 @@ from run_evaluation import (
     load_scvi_embedding,
     run_benchmark_exact,
     compute_scimilarity_corrected,
+    compute_harmony_corrected,
     force_cleanup,
     optimize_adata_memory,
     print_memory
@@ -285,6 +286,19 @@ def main():
             import traceback
             traceback.print_exc()
 
+    # STEP 6.5: Harmony
+    print("\n" + "="*80)
+    print("STEP 5.5: HARMONY")
+    print("="*80)
+
+    try:
+        adata = compute_harmony_corrected(adata, BATCH_KEY, N_JOBS)
+        force_cleanup()
+    except Exception as e:
+        print(f"✗ Harmony failed: {e}")
+        import traceback
+        traceback.print_exc()
+
     # STEP 7: Benchmarking
     print("\n" + "="*80)
     print("STEP 6: BENCHMARKING")
@@ -313,6 +327,14 @@ def main():
         df_scim = run_benchmark_exact(adata, 'X_scimilarity', OUTPUT_DIR, 'SCimilarity', N_JOBS)
         if df_scim is not None:
             results['SCimilarity'] = df_scim
+        force_cleanup()
+
+    # Harmony
+    if 'X_harmony' in adata.obsm:
+        print("\n--- Harmony ---")
+        df_harmony = run_benchmark_exact(adata, 'X_harmony', OUTPUT_DIR, 'Harmony', N_JOBS)
+        if df_harmony is not None:
+            results['Harmony'] = df_harmony
         force_cleanup()
 
     # STEP 8: Save results
