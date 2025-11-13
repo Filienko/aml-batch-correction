@@ -236,53 +236,10 @@ def main():
     print("STEP 4: SCVI EMBEDDINGS (OPTIONAL)")
     print("="*80)
 
-    if os.path.exists(SCVI_PATH):
-        print(f"⚠ Note: scVI embeddings were computed on full dataset")
-        print(f"  Attempting to subset to cross-mechanism studies...")
-
-        try:
-            adata_scvi_full = sc.read_h5ad(SCVI_PATH)
-            print(f"  scVI file: {adata_scvi_full.n_obs:,} cells × {adata_scvi_full.n_vars} features")
-            print(f"  Main data: {adata.n_obs:,} cells")
-
-            # Find cells from our subset in the scVI file
-            common_cells = adata.obs_names.intersection(adata_scvi_full.obs_names)
-
-            if len(common_cells) > 0:
-                print(f"  ✓ Found {len(common_cells):,} / {adata.n_obs:,} cells in scVI file")
-
-                # Check if we have all cells or need to subset
-                if len(common_cells) == adata.n_obs:
-                    print(f"  ✓ All cells found - reordering to match")
-                    # Reorder scVI to match adata
-                    adata_scvi_subset = adata_scvi_full[adata.obs_names]
-                    adata.obsm['X_scVI'] = adata_scvi_subset.X.copy()
-                    del adata_scvi_subset
-                else:
-                    print(f"  ⚠ Only {len(common_cells):,} / {adata.n_obs:,} cells found")
-                    print(f"  Subsetting both datasets to common cells...")
-                    # Subset both to common cells in same order
-                    common_cells_list = common_cells.tolist()
-                    adata = adata[common_cells_list].copy()
-                    adata_scvi_subset = adata_scvi_full[common_cells_list]
-                    adata.obsm['X_scVI'] = adata_scvi_subset.X.copy()
-                    del adata_scvi_subset
-
-                print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
-                print(f"  ✓ scVI embedding range: [{adata.obsm['X_scVI'].min():.2f}, {adata.obsm['X_scVI'].max():.2f}]")
-
-                del adata_scvi_full
-            else:
-                print(f"  ✗ No common cells found in scVI file")
-
-            force_cleanup()
-
-        except Exception as e:
-            print(f"  ✗ Could not load scVI embeddings: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(f"  ℹ scVI file not found: {SCVI_PATH}")
+    # Use the robust loading function from run_evaluation
+    # This handles cell ID mismatches (numeric indices vs barcodes)
+    adata = load_scvi_embedding(adata, SCVI_PATH)
+    force_cleanup()
 
     # STEP 6: SCimilarity
     if SCIMILARITY_ENABLED and os.path.exists(SCIMILARITY_MODEL):
