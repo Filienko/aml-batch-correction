@@ -116,8 +116,39 @@ def load_scvi_embedding(
                 except KeyError as e:
                     if verbose:
                         print(f"    ✗ Cannot reorder: cell IDs don't match")
+                        print(f"    ℹ Checking if IDs are just numeric indices...")
+
+                    # Case 1b: Same count, IDs don't match, but might be in same order
+                    # This happens when scVI file has numeric indices ('0', '1', '2')
+                    # but main data has cell barcodes
+                    try:
+                        # Check if scVI IDs are just numeric indices
+                        scvi_ids_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
+
+                        if scvi_ids_numeric:
+                            if verbose:
+                                print(f"    ✓ scVI file uses numeric indices")
+                                print(f"    ℹ Assuming embeddings are in same order as main data")
+                                print(f"    ⚠ WARNING: This assumes scVI embeddings were computed on same data in same order!")
+
+                            # Trust the order and copy directly
+                            adata.obsm[embedding_key] = adata_scvi.X.copy()
+
+                            if verbose:
+                                print(f"\n  ✓ Added '{embedding_key}' to adata.obsm")
+                                print(f"    Shape: {adata.obsm[embedding_key].shape}")
+
+                            del adata_scvi
+                            gc.collect()
+
+                            return adata
+
+                    except Exception as ex:
+                        if verbose:
+                            print(f"    ℹ Could not verify numeric indices: {ex}")
+                        pass
                     # Fall through to mismatch handling below
-        
+
         # Case 2: Different cell counts - try to find common cells
         if verbose:
             print(f"\n  ⚠ Cell count mismatch:")
