@@ -33,6 +33,7 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 
 # Import evaluation modules
+import run_evaluation
 from run_evaluation import (
     detect_batch_key,
     detect_label_key,
@@ -189,10 +190,15 @@ def main():
     print(f"Loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     print_memory()
 
-    # Detect batch and label keys
-    BATCH_KEY = detect_batch_key(adata)
-    LABEL_KEY = detect_label_key(adata)
-    BATCH_KEY_LOWER = BATCH_KEY.lower()
+    # Detect batch and label keys and set them in run_evaluation module
+    run_evaluation.BATCH_KEY = detect_batch_key(adata)
+    run_evaluation.LABEL_KEY = detect_label_key(adata)
+    run_evaluation.BATCH_KEY_LOWER = run_evaluation.BATCH_KEY.lower()
+
+    # Also keep local references for convenience
+    BATCH_KEY = run_evaluation.BATCH_KEY
+    LABEL_KEY = run_evaluation.LABEL_KEY
+    BATCH_KEY_LOWER = run_evaluation.BATCH_KEY_LOWER
 
     if BATCH_KEY_LOWER not in adata.obs.columns:
         adata.obs[BATCH_KEY_LOWER] = adata.obs[BATCH_KEY].copy()

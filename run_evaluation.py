@@ -110,6 +110,8 @@ def preprocess_adata_exact(adata, batch_key_lower):
     Preprocessing for uncorrected PCA baseline
     NOTE: SCimilarity will use the ORIGINAL data, not this preprocessed version
     """
+    global BATCH_KEY, LABEL_KEY
+
     print("\n" + "="*80)
     print("PREPROCESSING FOR UNCORRECTED PCA")
     print("="*80)
@@ -557,10 +559,12 @@ def compute_scimilarity_corrected(adata, model_path, batch_size=1000):
 
 def run_benchmark_exact(adata, embedding_key, output_dir, method_name=None, n_jobs=8):
     """Run scIB benchmark"""
+    global BATCH_KEY, LABEL_KEY
+
     print("\n" + "="*80)
     print(f"BENCHMARKING: {embedding_key}")
     print("="*80)
-    
+
     from scib_metrics.benchmark import Benchmarker, BioConservation
     import time
     
