@@ -28,7 +28,6 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 
 # Import evaluation modules
-from batch_correction_evaluation import compute_scimilarity_corrected
 from run_evaluation import (
     detect_batch_key,
     detect_label_key,
@@ -36,6 +35,7 @@ from run_evaluation import (
     prepare_uncorrected_embedding_exact,
     load_scvi_embedding,
     run_benchmark_exact,
+    compute_scimilarity_corrected,
     force_cleanup,
     optimize_adata_memory,
     print_memory
@@ -49,12 +49,15 @@ DATA_PATH = "data/AML_scAtlas.h5ad"
 SCVI_PATH = "data/AML_scAtlas_X_scVI.h5ad"
 SCIMILARITY_MODEL = "models/model_v1.1"
 
-# These will be populated after analyzing the dataset
-# Expected values based on technology mapping:
-# - van_galen: Seq-Well (microwell)
-# - naldini_2023: SMART-Seq v4 (well-based)
-# - largest droplet: one of the 10x studies
-CROSS_MECHANISM_STUDIES = None
+# Cross-mechanism studies: 4 non-droplet + 1 droplet baseline
+# Manual selection for balanced comparison of diverse technologies
+CROSS_MECHANISM_STUDIES = [
+    'van_galen_2019',  # Seq-Well (microwell)
+    'pei_2020',        # CITEseq (multimodal)
+    'velten_2021',     # Muta-Seq (mutation tracking)
+    'zhai_2022',       # SORT-Seq (FACS-based)
+    'setty_2019'       # 10x Chromium (droplet baseline)
+]
 
 N_HVGS = 2000
 N_JOBS = 8
@@ -169,12 +172,10 @@ def main():
         print(f"\n✗ Data file not found: {DATA_PATH}")
         return
 
-    # Load study configuration
-    load_study_configuration()
-
-    if CROSS_MECHANISM_STUDIES is None or len(CROSS_MECHANISM_STUDIES) == 0:
-        print("\n✗ No studies configured for cross-mechanism experiment")
-        return
+    # Studies are hardcoded at the top of this file
+    print(f"\nUsing {len(CROSS_MECHANISM_STUDIES)} pre-selected studies:")
+    for study in CROSS_MECHANISM_STUDIES:
+        print(f"  - {study}")
 
     # STEP 1: Load data
     print("\n" + "="*80)

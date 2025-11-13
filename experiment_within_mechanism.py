@@ -33,7 +33,6 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 
 # Import evaluation modules
-from batch_correction_evaluation import compute_scimilarity_corrected
 from run_evaluation import (
     detect_batch_key,
     detect_label_key,
@@ -41,6 +40,7 @@ from run_evaluation import (
     prepare_uncorrected_embedding_exact,
     load_scvi_embedding,
     run_benchmark_exact,
+    compute_scimilarity_corrected,
     force_cleanup,
     optimize_adata_memory,
     print_memory
