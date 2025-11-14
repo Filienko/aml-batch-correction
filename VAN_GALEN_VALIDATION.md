@@ -4,6 +4,35 @@
 
 This document describes the biological validation approach using **van Galen et al. 2019** as the gold standard for AML cell type classification. This addresses the question: **Can batch correction methods (particularly SCimilarity) reproduce published biological findings across independent datasets?**
 
+## Quick Start (Recommended Workflow)
+
+⚠️ **IMPORTANT**: Different studies may use different cell type labels! Follow this workflow:
+
+```bash
+# Step 1: Check what labels actually exist in your data
+python inspect_cell_type_labels.py
+
+# Step 2A: If labels are compatible (inspect script will tell you)
+#         → Update label mapping and run label-based validation
+python validate_aml_subtypes.py
+
+# Step 2B: If labels DON'T match (common issue!)
+#         → Use marker-based validation (works without labels)
+python validate_marker_expression.py
+```
+
+**Most likely scenario**: Labels won't match perfectly, so you'll use `validate_marker_expression.py` which validates batch correction based on **marker gene expression** instead of requiring matching cell type labels.
+
+## Three Validation Scripts
+
+| Script | When to Use | Requires Labels? | Robustness |
+|--------|-------------|------------------|------------|
+| `inspect_cell_type_labels.py` | **Always run first** | No | N/A - inspection only |
+| `validate_aml_subtypes.py` | Labels match van Galen's 6 subtypes | **Yes** - exact mapping required | Low - label dependent |
+| `validate_marker_expression.py` | Labels don't match or missing | **No** - label-free | **High** - works universally |
+
+**Recommendation**: Use `validate_marker_expression.py` unless you've verified labels are compatible.
+
 ## Background
 
 ### The van Galen 2019 Framework
@@ -132,22 +161,100 @@ General validation comparing any batch correction method against van Galen as go
 - **Harmony**: Balanced performance, good for technical batch correction
 - **Uncorrected**: Low transferability (batch effects dominate)
 
+## Critical Issue: Label Compatibility
+
+**⚠️ IMPORTANT**: Before running the validation, you MUST verify that the studies have compatible cell type labels!
+
+### The Problem
+
+Different studies may use different annotation schemes:
+- **van Galen**: "HSC", "Progenitors", "GMP", "ProMono", "Monocyte", "cDC"
+- **Study A**: "CD34+ cells", "Myeloblasts", "Monocytic cells"
+- **Study B**: "Cluster 1", "Cluster 2", "Cluster 3"
+- **Study C**: No subtype annotations, only "Malignant" vs "Normal"
+
+The validation **will fail** if labels don't match or if studies lack detailed annotations.
+
+### Solution: Two-Step Approach
+
 ## Running the Validation
 
-### Prerequisites
+### Step 1: Inspect Labels (REQUIRED FIRST)
+
+Run this script to check what labels actually exist in your data:
 
 ```bash
-# Ensure data files exist:
-data/AML_scAtlas.h5ad          # Main AML atlas
-data/AML_scAtlas_X_scVI.h5ad   # Pre-computed scVI embeddings (optional)
-models/model_v1.1/             # SCimilarity model
+python inspect_cell_type_labels.py
 ```
 
-### Execute Validation
+**This script will tell you:**
+- ✓ What annotation columns exist (CellType, cell_type, cluster, etc.)
+- ✓ What labels are present in each study
+- ✓ Whether studies have malignant/AML cell annotations
+- ✓ If labels can be mapped to van Galen's 6 subtypes
+- ✓ **Whether the validation is feasible with your data**
+
+**Example output:**
+```
+van_galen_2019:
+  HSC: 1,200 cells
+  Progenitors: 3,400 cells
+  GMP: 2,100 cells
+  ...
+
+setty_2019:
+  CD34+ HSPCs: 800 cells      # Can map to "HSC"
+  Myeloblasts: 1,500 cells    # Can map to "Progenitors"?
+  Monocytes: 2,300 cells      # Can map to "Monocyte"
+  ...
+
+✓ Van Galen validation is FEASIBLE
+→ Update harmonize_cell_type_labels() with correct mapping
+```
+
+### Step 2A: Label-Based Validation (if labels match)
+
+If `inspect_cell_type_labels.py` shows compatible labels:
 
 ```bash
+# 1. Update label mapping in validate_aml_subtypes.py
+#    (lines 134-169: harmonize_cell_type_labels function)
+
+# 2. Run validation
 python validate_aml_subtypes.py
 ```
+
+**Prerequisites:**
+- ✅ van_galen_2019 study present
+- ✅ Cell type annotations at subtype level
+- ✅ Labels can be mapped to van Galen's 6 subtypes
+
+### Step 2B: Marker-Based Validation (if labels don't match)
+
+If labels are incompatible or missing, use this **label-free alternative**:
+
+```bash
+python validate_marker_expression.py
+```
+
+**This validation doesn't require matching labels!**
+
+Instead it:
+- Computes marker gene scores (e.g., HSC score = avg(AVP, CD34, HOPX, SPINK2))
+- Identifies populations by marker expression (unsupervised)
+- Tests if batch correction preserves marker patterns
+- Checks if marker-defined populations are well-separated
+
+**Advantages:**
+- ✅ Works without cell type labels
+- ✅ More robust across different annotation schemes
+- ✅ Directly tests biological signal preservation
+- ✅ Can validate even with "Cluster 1, 2, 3" labels
+
+**Disadvantages:**
+- ✗ Less interpretable than direct label transfer
+- ✗ Requires marker genes to be in dataset
+- ✗ Can't test prediction accuracy (no ground truth)
 
 ### Output
 
