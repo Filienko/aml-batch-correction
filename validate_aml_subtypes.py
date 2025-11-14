@@ -337,6 +337,92 @@ def validate_marker_gene_enrichment(adata, label_col='van_galen_subtype'):
     return pd.DataFrame(results)
 
 
+def validate_marker_enrichment_per_method(adata, embedding_key, method_name, ref_study, test_studies, k=15):
+    """
+    Validate marker enrichment for PREDICTIONS from a specific method.
+
+    This tests if predicted cell types actually express the correct markers.
+    Critical for determining if methods preserve biological signal.
+    """
+    print(f"\n{'='*80}")
+    print(f"MARKER ENRICHMENT: {method_name}")
+    print(f"{'='*80}")
+
+    if embedding_key not in adata.obsm:
+        print(f"✗ Embedding not found")
+        return None
+
+    # Need normalized expression
+    if 'normalised_counts' in adata.layers:
+        X = adata.layers['normalised_counts']
+    else:
+        X = adata.X
+
+    # Train k-NN on reference
+    ref_mask = adata.obs['Study'] == ref_study
+    ref_embedding = adata.obsm[embedding_key][ref_mask]
+    ref_labels = adata.obs['van_galen_subtype'][ref_mask].values
+
+    knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
+    knn.fit(ref_embedding, ref_labels)
+
+    all_results = []
+
+    # Test on each study
+    for test_study in test_studies:
+        test_mask = adata.obs['Study'] == test_study
+        if test_mask.sum() == 0:
+            continue
+
+        test_embedding = adata.obsm[embedding_key][test_mask]
+        test_indices = np.where(test_mask)[0]
+
+        # Get PREDICTIONS (not true labels!)
+        pred_labels = knn.predict(test_embedding)
+
+        print(f"\nStudy: {test_study} ({test_mask.sum():,} cells)")
+
+        # For each predicted subtype, check marker enrichment
+        for subtype, markers in VAN_GALEN_SUBTYPE_MARKERS.items():
+            pred_mask_local = pred_labels == subtype  # In test_embedding space
+            n_predicted = pred_mask_local.sum()
+
+            if n_predicted == 0:
+                continue
+
+            markers_found = [m for m in markers if m in adata.var_names]
+            if len(markers_found) == 0:
+                continue
+
+            marker_indices = [adata.var_names.get_loc(m) for m in markers_found]
+
+            # Get marker expression for predicted cells
+            pred_global_indices = test_indices[pred_mask_local]
+
+            if hasattr(X, 'toarray'):
+                in_predicted = X[pred_global_indices][:, marker_indices].toarray().mean()
+                not_in_predicted = X[~np.isin(np.arange(adata.n_obs), pred_global_indices)][:, marker_indices].toarray().mean()
+            else:
+                in_predicted = X[pred_global_indices][:, marker_indices].mean()
+                not_in_predicted = X[~np.isin(np.arange(adata.n_obs), pred_global_indices)][:, marker_indices].mean()
+
+            fold_change = in_predicted / (not_in_predicted + 1e-10)
+
+            print(f"  {subtype} (n={n_predicted}):")
+            print(f"    Enrichment: {fold_change:.2f}x")
+
+            all_results.append({
+                'Method': method_name,
+                'Test_Study': test_study,
+                'Predicted_Subtype': subtype,
+                'N_Predicted_Cells': n_predicted,
+                'N_Markers': len(markers_found),
+                'Fold_Enrichment': fold_change,
+            })
+
+    return pd.DataFrame(all_results)
+
+
 def main():
     """
     Main validation pipeline for AML subtype prediction.
@@ -509,35 +595,142 @@ def main():
             df.to_csv(output_file, index=False)
             print(f"\n✓ Saved: {output_file}")
 
-    # Marker validation
+    # Marker validation - PER METHOD (CRITICAL!)
     print("\n" + "="*80)
-    print("MARKER GENE VALIDATION")
+    print("MARKER ENRICHMENT VALIDATION (PER METHOD)")
     print("="*80)
+    print("\nThis tests if PREDICTED cell types express correct markers.")
+    print("Higher enrichment = better biological preservation!")
 
-    marker_df = validate_marker_gene_enrichment(adata, 'van_galen_subtype')
-    if not marker_df.empty:
-        marker_file = os.path.join(OUTPUT_DIR, "marker_enrichment.csv")
-        marker_df.to_csv(marker_file, index=False)
-        print(f"\n✓ Saved: {marker_file}")
+    all_marker_results = []
 
-    # Summary
-    if len(all_results) > 0:
+    for embedding_key, method_name in [
+        ('X_uncorrected', 'Uncorrected'),
+        ('X_scVI', 'scVI'),
+        ('X_scimilarity', 'SCimilarity'),
+        ('X_harmony', 'Harmony')
+    ]:
+        if embedding_key not in adata.obsm:
+            continue
+
+        marker_df = validate_marker_enrichment_per_method(
+            adata, embedding_key, method_name,
+            VAN_GALEN_STUDY, TEST_STUDIES_FILTERED, k=K_NEIGHBORS
+        )
+
+        if marker_df is not None and not marker_df.empty:
+            all_marker_results.append(marker_df)
+
+            output_file = os.path.join(OUTPUT_DIR, f"{method_name.lower()}_marker_enrichment.csv")
+            marker_df.to_csv(output_file, index=False)
+            print(f"\n✓ Saved: {output_file}")
+
+    # Combine and compare
+    if all_marker_results:
+        combined_markers = pd.concat(all_marker_results, ignore_index=True)
+        combined_file = os.path.join(OUTPUT_DIR, "marker_enrichment_comparison.csv")
+        combined_markers.to_csv(combined_file, index=False)
+        print(f"\n✓ Saved combined: {combined_file}")
+
+        # Summary statistics
         print("\n" + "="*80)
-        print("FINAL COMPARISON")
+        print("MARKER ENRICHMENT SUMMARY (BY METHOD)")
         print("="*80)
 
-        combined = pd.concat(all_results.values(), ignore_index=True)
-        summary = combined.groupby('Method').agg({
-            'Accuracy': 'mean',
-            'Mean_Confidence': 'mean',
-            'N_Cells': 'sum'
-        }).round(3)
+        summary = combined_markers.groupby('Method')['Fold_Enrichment'].agg(['mean', 'std', 'min', 'max'])
+        print("\nAverage Marker Enrichment:")
+        for method, row in summary.iterrows():
+            print(f"  {method:15s}: {row['mean']:.2f}x (±{row['std']:.2f})")
 
-        print("\n" + summary.to_string())
+        # Per-subtype comparison
+        print("\nPer-Subtype Enrichment:")
+        for subtype in VAN_GALEN_MALIGNANT_SUBTYPES:
+            subtype_data = combined_markers[combined_markers['Predicted_Subtype'] == subtype]
+            if subtype_data.empty:
+                continue
+            print(f"\n  {subtype}:")
+            for method in subtype_data['Method'].unique():
+                method_data = subtype_data[subtype_data['Method'] == method]
+                if not method_data.empty:
+                    avg_enrichment = method_data['Fold_Enrichment'].mean()
+                    print(f"    {method:15s}: {avg_enrichment:.2f}x")
 
-        summary_file = os.path.join(OUTPUT_DIR, "subtype_prediction_summary.csv")
-        summary.to_csv(summary_file)
-        print(f"\n✓ Summary saved: {summary_file}")
+    # Summary - Combine accuracy and marker enrichment
+    if len(all_results) > 0 or all_marker_results:
+        print("\n" + "="*80)
+        print("FINAL COMPARISON: ACCURACY + MARKER ENRICHMENT")
+        print("="*80)
+
+        final_summary = []
+
+        # Get accuracy stats
+        if len(all_results) > 0:
+            combined = pd.concat(all_results.values(), ignore_index=True)
+            accuracy_stats = combined.groupby('Method').agg({
+                'Accuracy': 'mean',
+                'Mean_Confidence': 'mean'
+            })
+        else:
+            accuracy_stats = pd.DataFrame()
+
+        # Get marker enrichment stats
+        if all_marker_results:
+            combined_markers = pd.concat(all_marker_results, ignore_index=True)
+            marker_stats = combined_markers.groupby('Method')['Fold_Enrichment'].mean()
+        else:
+            marker_stats = pd.Series()
+
+        # Combine
+        for method in ['Uncorrected', 'scVI', 'SCimilarity', 'Harmony']:
+            row = {'Method': method}
+
+            if method in accuracy_stats.index:
+                row['Accuracy'] = accuracy_stats.loc[method, 'Accuracy']
+                row['Confidence'] = accuracy_stats.loc[method, 'Mean_Confidence']
+            else:
+                row['Accuracy'] = None
+                row['Confidence'] = None
+
+            if method in marker_stats.index:
+                row['Marker_Enrichment'] = marker_stats.loc[method]
+            else:
+                row['Marker_Enrichment'] = None
+
+            final_summary.append(row)
+
+        final_df = pd.DataFrame(final_summary)
+        final_df = final_df.round(3)
+
+        print("\n" + final_df.to_string(index=False))
+
+        print("\n" + "="*80)
+        print("INTERPRETATION")
+        print("="*80)
+        print("\nKey Metrics:")
+        print("  • Accuracy: Can we correctly classify cells? (higher = better)")
+        print("  • Marker Enrichment: Do predictions match biology? (higher = better)")
+        print("\nIdeal result: High accuracy + High marker enrichment")
+        print("⚠️  If accuracy is high but enrichment is low → over-correction (distorted biology)")
+        print("⚠️  If enrichment is high but accuracy is low → under-correction (batch effects remain)")
+
+        # Identify best method
+        if not final_df.empty:
+            best_accuracy = final_df.loc[final_df['Accuracy'].idxmax(), 'Method']
+            best_marker = final_df.loc[final_df['Marker_Enrichment'].idxmax(), 'Method']
+
+            print(f"\n✓ Highest Accuracy: {best_accuracy}")
+            print(f"✓ Highest Marker Enrichment: {best_marker}")
+
+            if best_accuracy == best_marker:
+                print(f"\n⭐ {best_accuracy} excels at both metrics!")
+            else:
+                print(f"\n💡 Trade-off detected:")
+                print(f"   {best_accuracy} prioritizes accuracy (batch mixing)")
+                print(f"   {best_marker} prioritizes biology (marker preservation)")
+
+        summary_file = os.path.join(OUTPUT_DIR, "final_comparison.csv")
+        final_df.to_csv(summary_file, index=False)
+        print(f"\n✓ Final comparison saved: {summary_file}")
 
     print("\n" + "="*80)
     print("✓ VAN GALEN SUBTYPE VALIDATION COMPLETE")
