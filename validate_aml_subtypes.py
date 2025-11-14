@@ -75,11 +75,15 @@ SCIMILARITY_MODEL = "models/model_v1.1"
 VAN_GALEN_STUDY = 'van_galen_2019'
 
 # Studies to test van Galen classification on
+# IMPORTANT: Only use studies that actually CITED and USED van Galen's framework!
+# - velten_2021: ✅ Nature 2021, explicitly uses van Galen classification
+# - zhai_2022: ✅ Nat Commun 2022, uses van Galen classifier (if available in atlas)
+# - setty_2019: ❌ Published BEFORE van Galen (2019)
+# - pei_2020: ❌ Uses own annotation, not van Galen
+# - oetjen_2018: ❌ Published BEFORE van Galen
 TEST_STUDIES = [
-    'setty_2019',      # 10x Chromium
-    'pei_2020',        # CITEseq
-    'velten_2021',     # Muta-Seq
-    'oetjen_2018',     # 10x
+    'velten_2021',     # ✅ Muta-Seq - Actually uses van Galen framework
+    'zhai_2022',       # ✅ SORT-Seq - Uses van Galen classifier (if in atlas)
 ]
 
 N_HVGS = 2000
@@ -346,6 +350,20 @@ def main():
     for i, subtype in enumerate(VAN_GALEN_MALIGNANT_SUBTYPES, 1):
         print(f"  {i}. {subtype}")
 
+    print("\n" + "="*80)
+    print("IMPORTANT NOTES")
+    print("="*80)
+    print("\n1. 'Uncorrected' baseline = PCA on log-normalized, HVG-selected data")
+    print("   → NOT truly uncorrected! PCA already provides structure.")
+    print("   → If 'uncorrected' performs well, batch effects may be weak.")
+    print("\n2. Different embedding spaces (50D PCA vs 256D SCimilarity)")
+    print("   → k-NN performance depends on embedding properties")
+    print("   → PCA's orthogonal/standardized space may favor k-NN")
+    print("\n3. Only using studies that actually cited van Galen's framework:")
+    print("   → velten_2021: Nature 2021, explicitly uses van Galen")
+    print("   → zhai_2022: Nat Commun 2022, uses van Galen classifier (if available)")
+    print("   → This is STRONGER validation than using any study with matching labels")
+
     if not os.path.exists(DATA_PATH):
         print(f"\n✗ Data file not found: {DATA_PATH}")
         return
@@ -370,8 +388,43 @@ def main():
     if BATCH_KEY_LOWER not in adata.obs.columns:
         adata.obs[BATCH_KEY_LOWER] = adata.obs[BATCH_KEY].copy()
 
-    # Subset to van Galen + test studies
-    all_studies = [VAN_GALEN_STUDY] + TEST_STUDIES
+    # Check which test studies are actually available
+    available_studies = set(adata.obs[BATCH_KEY].unique())
+
+    print(f"\nChecking study availability:")
+    print(f"  Reference: {VAN_GALEN_STUDY}", "✓" if VAN_GALEN_STUDY in available_studies else "✗ NOT FOUND")
+
+    if VAN_GALEN_STUDY not in available_studies:
+        print(f"\n✗ ERROR: Reference study '{VAN_GALEN_STUDY}' not found in dataset!")
+        print(f"Available studies: {sorted(available_studies)}")
+        return
+
+    # Filter to available test studies
+    available_test_studies = [s for s in TEST_STUDIES if s in available_studies]
+    unavailable_test_studies = [s for s in TEST_STUDIES if s not in available_studies]
+
+    print(f"\n  Test studies:")
+    for study in TEST_STUDIES:
+        if study in available_studies:
+            n_cells = (adata.obs[BATCH_KEY] == study).sum()
+            print(f"    ✓ {study}: {n_cells:,} cells")
+        else:
+            print(f"    ✗ {study}: NOT FOUND")
+
+    if len(available_test_studies) == 0:
+        print(f"\n✗ ERROR: No test studies found!")
+        print(f"Available studies: {sorted(available_studies)}")
+        return
+
+    if unavailable_test_studies:
+        print(f"\n⚠ WARNING: {len(unavailable_test_studies)} test studies not found: {unavailable_test_studies}")
+        print(f"Continuing with {len(available_test_studies)} available studies: {available_test_studies}")
+
+    # Update TEST_STUDIES to only available ones
+    TEST_STUDIES_FILTERED = available_test_studies
+
+    # Subset to van Galen + available test studies
+    all_studies = [VAN_GALEN_STUDY] + TEST_STUDIES_FILTERED
     mask = adata.obs[BATCH_KEY].isin(all_studies)
     adata = adata[mask].copy()
 
@@ -445,7 +498,7 @@ def main():
             continue
 
         df = predict_van_galen_subtypes(
-            adata, embedding_key, VAN_GALEN_STUDY, TEST_STUDIES, k=K_NEIGHBORS
+            adata, embedding_key, VAN_GALEN_STUDY, TEST_STUDIES_FILTERED, k=K_NEIGHBORS
         )
 
         if df is not None:
