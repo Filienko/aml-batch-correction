@@ -89,25 +89,25 @@ SCIMILARITY_BATCH_SIZE = 1000
 SCIMILARITY_ENABLED = True
 K_NEIGHBORS = 15
 
-# Van Galen's 6 malignant AML subtypes (simplified mapping)
-# In your data, these might be named differently - need to map
+# Van Galen's 6 malignant AML subtypes - using actual labels from data
+# All studies in this atlas use the same annotation scheme!
 VAN_GALEN_MALIGNANT_SUBTYPES = [
-    'HSC',           # HSC-like (stem-like)
-    'Progenitors',   # Progenitor-like
-    'GMP',           # GMP-like
-    'Promono',       # Promonocyte-like
-    'Monocyte',      # Monocyte-like
-    'cDC',           # Dendritic-like
+    'HSPC',          # HSC-like (stem-like) - Hematopoietic Stem/Progenitor Cells
+    'CMP',           # Progenitor-like - Common Myeloid Progenitor
+    'GMP',           # GMP-like - Granulocyte-Monocyte Progenitor
+    'ProMono',       # Promonocyte-like
+    'CD14+ Mono',    # Monocyte-like - CD14+ Monocytes
+    'cDC',           # Dendritic-like - conventional Dendritic Cells
 ]
 
-# Marker genes for each van Galen subtype
+# Marker genes for each van Galen subtype (from van Galen Cell 2019)
 VAN_GALEN_SUBTYPE_MARKERS = {
-    'HSC': ['AVP', 'CD34', 'HOPX', 'SPINK2'],
-    'Progenitors': ['CD34', 'MPO', 'CEBPA'],
-    'GMP': ['MPO', 'ELANE', 'AZU1', 'CTSG'],
-    'Promono': ['CEBPB', 'CEBPD', 'CD14'],
-    'Monocyte': ['CD14', 'LYZ', 'S100A9', 'S100A8'],
-    'cDC': ['IRF8', 'IRF4', 'CD1C'],
+    'HSPC': ['AVP', 'CD34', 'HOPX', 'SPINK2'],  # HSC/stem markers
+    'CMP': ['CD34', 'MPO', 'CEBPA'],            # Early progenitor markers
+    'GMP': ['MPO', 'ELANE', 'AZU1', 'CTSG'],    # Myeloid progenitor markers
+    'ProMono': ['CEBPB', 'CEBPD', 'CD14'],      # Promonocyte markers
+    'CD14+ Mono': ['CD14', 'LYZ', 'S100A9', 'S100A8'],  # Monocyte markers
+    'cDC': ['IRF8', 'IRF4', 'CD1C'],            # Dendritic cell markers
 }
 
 
@@ -130,42 +130,22 @@ def harmonize_cell_type_labels(adata, label_key):
         print(f"  {label}: {n:,} cells")
 
     # Create mapping to van Galen subtypes
-    # This is dataset-specific - adjust based on your data
+    # Good news: All studies in this atlas use the same annotation scheme!
+    # We just need to keep the 6 malignant AML subtypes
     mapping = {
-        # HSC-like
-        'HSC': 'HSC',
-        'HSC/MPP': 'HSC',
-        'HSC/MPPs': 'HSC',
-        'HSPC': 'HSC',
-
-        # Progenitor-like
-        'Prog': 'Progenitors',
-        'Progenitor': 'Progenitors',
-        'Progenitors': 'Progenitors',
-        'MPP': 'Progenitors',
-
-        # GMP-like
+        # These are the 6 van Galen malignant subtypes - keep as-is
+        'HSPC': 'HSPC',
+        'CMP': 'CMP',
         'GMP': 'GMP',
-        'GMP-like': 'GMP',
-        'Myeloid progenitors': 'GMP',
-
-        # Promonocyte-like
-        'ProMono': 'Promono',
-        'Promonocyte': 'Promono',
-        'Promono': 'Promono',
-
-        # Monocyte-like
-        'Monocyte': 'Monocyte',
-        'Monocytes': 'Monocyte',
-        'CD14+ monocyte': 'Monocyte',
-        'HLA-II+ monocyte': 'Monocyte',
-
-        # Dendritic-like
+        'ProMono': 'ProMono',
+        'CD14+ Mono': 'CD14+ Mono',
         'cDC': 'cDC',
-        'cDC1': 'cDC',
-        'cDC2': 'cDC',
-        'Dendritic Cells': 'cDC',
-        'Conventional Dendritic Cells': 'cDC',
+
+        # Also include related monocyte subtype
+        'CD16+ Mono': 'CD14+ Mono',  # Group with CD14+ Mono (both monocytic)
+
+        # Note: Other cell types (T, B, NK, Erythroid, etc.) are NOT malignant
+        # and will be filtered out (unmapped)
     }
 
     # Apply mapping
