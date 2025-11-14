@@ -42,6 +42,7 @@ from run_evaluation import (
     load_scvi_embedding,
     run_benchmark_exact,
     compute_scimilarity_corrected,
+    compute_harmony_corrected,
     force_cleanup,
     optimize_adata_memory,
     print_memory
@@ -206,6 +207,74 @@ def main():
     # STEP 2: Subset to within-mechanism studies
     adata = subset_to_within_mechanism(adata, BATCH_KEY)
 
+    # CRITICAL: Load scVI NOW, before preprocessing changes cell counts
+    # At this point, cells are in same order as original data (just filtered by Study)
+    # We'll store original indices to map to scVI embeddings
+    print("\n" + "="*80)
+    print("STEP 2.5: SCVI EMBEDDINGS (BEFORE PREPROCESSING)")
+    print("="*80)
+
+    # Store original row positions before any filtering
+    # These correspond to positions in the scVI file
+    if not hasattr(adata, 'uns'):
+        adata.uns = {}
+    adata.uns['original_indices'] = np.arange(adata.n_obs)
+
+    if os.path.exists(SCVI_PATH):
+        try:
+            print(f"  Loading scVI file: {SCVI_PATH}")
+            adata_scvi = sc.read_h5ad(SCVI_PATH)
+            print(f"  scVI: {adata_scvi.n_obs:,} cells × {adata_scvi.n_vars} features")
+            print(f"  Main: {adata.n_obs:,} cells (after study subsetting)")
+
+            # Check if scVI file has numeric indices (computed on original data)
+            scvi_has_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
+
+            if scvi_has_numeric and adata_scvi.n_obs >= adata.n_obs:
+                print(f"  ✓ scVI uses numeric indices - assuming same order as original data")
+                print(f"  Strategy: Use row positions to match cells")
+
+                # Get Study info for each cell in current adata
+                studies_in_subset = adata.obs[BATCH_KEY].unique()
+                print(f"  Studies in current subset: {list(studies_in_subset)}")
+
+                # Load full data temporarily to get original indices
+                print(f"  Loading original data to find cell positions...")
+                adata_full_temp = sc.read_h5ad(DATA_PATH)
+
+                # Find which rows in original data match our subset
+                mask = adata_full_temp.obs[BATCH_KEY].isin(studies_in_subset)
+                original_indices = np.where(mask)[0]
+
+                print(f"  ✓ Found {len(original_indices):,} matching cells in original data")
+                print(f"  Index range: [{original_indices.min()}..{original_indices.max()}]")
+
+                del adata_full_temp
+                force_cleanup()
+
+                # Subset scVI using original indices
+                if len(original_indices) == adata.n_obs:
+                    print(f"  Subsetting scVI embeddings using original indices...")
+                    adata.obsm['X_scVI'] = adata_scvi.X[original_indices].copy()
+                    print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
+                    print(f"  ✓ scVI range: [{adata.obsm['X_scVI'].min():.2f}, {adata.obsm['X_scVI'].max():.2f}]")
+                else:
+                    print(f"  ✗ Index count mismatch: {len(original_indices)} vs {adata.n_obs}")
+            else:
+                print(f"  ⚠ scVI file format not compatible for automatic matching")
+                print(f"  Trying standard loading function...")
+                adata = load_scvi_embedding(adata, SCVI_PATH)
+
+            del adata_scvi
+            force_cleanup()
+
+        except Exception as e:
+            print(f"  ✗ Error loading scVI: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"  ℹ scVI file not found: {SCVI_PATH}")
+
     # Optimize memory
     adata = optimize_adata_memory(adata)
     force_cleanup()
@@ -232,42 +301,10 @@ def main():
         traceback.print_exc()
         return
 
-    # STEP 5: Load scVI embeddings (if available)
-    print("\n" + "="*80)
-    print("STEP 4: SCVI EMBEDDINGS (OPTIONAL)")
-    print("="*80)
+    # Note: scVI loading now happens BEFORE preprocessing (see STEP 2.5)
+    # This allows matching cells by original row positions
 
-    if os.path.exists(SCVI_PATH):
-        print(f"⚠ Note: scVI embeddings were computed on full dataset")
-        print(f"  Attempting to subset to within-mechanism studies...")
-
-        try:
-            adata_scvi_full = sc.read_h5ad(SCVI_PATH)
-
-            # Find cells from our subset in the scVI file
-            common_cells = adata.obs_names.intersection(adata_scvi_full.obs_names)
-
-            if len(common_cells) > 0:
-                print(f"  ✓ Found {len(common_cells):,} / {adata.n_obs:,} cells in scVI file")
-
-                # Reorder to match our subset
-                adata_scvi_subset = adata_scvi_full[adata.obs_names]
-                adata.obsm['X_scVI'] = adata_scvi_subset.X.copy()
-
-                print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
-
-                del adata_scvi_full, adata_scvi_subset
-            else:
-                print(f"  ✗ No common cells found in scVI file")
-
-            force_cleanup()
-
-        except Exception as e:
-            print(f"  ✗ Could not load scVI embeddings: {e}")
-    else:
-        print(f"  ℹ scVI file not found: {SCVI_PATH}")
-
-    # STEP 6: SCimilarity
+    # STEP 5: SCimilarity
     if SCIMILARITY_ENABLED and os.path.exists(SCIMILARITY_MODEL):
         print("\n" + "="*80)
         print("STEP 5: SCIMILARITY")
@@ -285,9 +322,22 @@ def main():
             import traceback
             traceback.print_exc()
 
+    # STEP 6: Harmony
+    print("\n" + "="*80)
+    print("STEP 6: HARMONY")
+    print("="*80)
+
+    try:
+        adata = compute_harmony_corrected(adata, BATCH_KEY, N_JOBS)
+        force_cleanup()
+    except Exception as e:
+        print(f"✗ Harmony failed: {e}")
+        import traceback
+        traceback.print_exc()
+
     # STEP 7: Benchmarking
     print("\n" + "="*80)
-    print("STEP 6: BENCHMARKING")
+    print("STEP 7: BENCHMARKING")
     print("="*80)
 
     results = {}
@@ -313,6 +363,14 @@ def main():
         df_scim = run_benchmark_exact(adata, 'X_scimilarity', OUTPUT_DIR, 'SCimilarity', N_JOBS)
         if df_scim is not None:
             results['SCimilarity'] = df_scim
+        force_cleanup()
+
+    # Harmony
+    if 'X_harmony' in adata.obsm:
+        print("\n--- Harmony ---")
+        df_harmony = run_benchmark_exact(adata, 'X_harmony', OUTPUT_DIR, 'Harmony', N_JOBS)
+        if df_harmony is not None:
+            results['Harmony'] = df_harmony
         force_cleanup()
 
     # STEP 8: Save results

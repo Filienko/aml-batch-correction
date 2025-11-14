@@ -1,19 +1,16 @@
 #!/usr/bin/env python
 """
-Experiment 1: Cross-Mechanism Batch Correction
+Pairwise Batch Correction Comparison
 
-Tests batch correction performance across different scRNA-seq technologies:
-- Non-droplet technologies: Seq-Well, SORT-Seq, CITEseq, Muta-Seq
-- Droplet-based technologies: 10x Genomics Chromium (top 3 largest studies)
+Tests batch correction on pairs of studies to match SCimilarity paper methodology.
+The original SCimilarity paper compared "two kidney datasets, two PBMC datasets,
+two lung datasets" - i.e., pairwise comparisons.
 
-This is a harder problem than within-mechanism correction because:
-1. Different technologies have fundamentally different biases and characteristics
-2. Gene detection rates vary significantly across platforms
-3. Library prep differences create systematic variations
-4. Technical variation can be as large as biological variation
-
-Note: Study sizes vary considerably (2k to 80k cells per study), which may
-affect batch correction performance.
+This is a fairer test because:
+1. Batch correction metrics work better with 2 batches
+2. Clearer interpretation (biology vs batch)
+3. SCimilarity designed for pairwise integration
+4. Less advantage for multi-batch optimizers like Harmony
 """
 
 import os
@@ -44,109 +41,71 @@ from run_evaluation import (
 )
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION - EDIT THESE TWO STUDIES
 # ============================================================================
 
 DATA_PATH = "data/AML_scAtlas.h5ad"
 SCVI_PATH = "data/AML_scAtlas_X_scVI.h5ad"
 SCIMILARITY_MODEL = "models/model_v1.1"
 
-# Cross-mechanism studies: 4 non-droplet + 1 droplet baseline
-# Manual selection for balanced comparison of diverse technologies
-CROSS_MECHANISM_STUDIES = [
-    'van_galen_2019',  # Seq-Well (microwell)
-    'pei_2020',        # CITEseq (multimodal)
-    'velten_2021',     # Muta-Seq (mutation tracking)
-    'zhai_2022',       # SORT-Seq (FACS-based)
-    'setty_2019'       # 10x Chromium (droplet baseline)
-]
+# ============== CONFIGURE YOUR TWO STUDIES HERE ==============
+STUDY_A = 'van_galen_2019'  # Seq-Well
+STUDY_B = 'setty_2019'       # 10x Chromium
+
+# Or try other pairs:
+# STUDY_A = 'oetjen_2018'           # 10x
+# STUDY_B = 'beneyto-calabuig-2023' # 10x
+# ============================================================
 
 N_HVGS = 2000
 N_JOBS = 8
-OUTPUT_DIR = "results_cross_mechanism"
+OUTPUT_DIR = f"results_pairwise_{STUDY_A}_vs_{STUDY_B}"
 SCIMILARITY_BATCH_SIZE = 1000
 SCIMILARITY_ENABLED = True
 
 
-def load_study_configuration():
+def subset_to_two_studies(adata, study_a, study_b, batch_key='Study'):
     """
-    Load study configuration from analysis results.
-    If not available, use default configuration.
-    """
-    global CROSS_MECHANISM_STUDIES
-
-    config_file = "study_analysis_results.csv"
-
-    if os.path.exists(config_file):
-        print(f"Loading study configuration from {config_file}")
-        df = pd.read_csv(config_file)
-
-        # Select one study from each category
-        microwell = df[df['Category'] == 'microwell']
-        wellbased = df[df['Category'] == 'well-based']
-        droplet = df[df['Category'] == 'droplet'].sort_values('N_cells', ascending=False)
-
-        studies = []
-        if not microwell.empty:
-            studies.append(microwell.iloc[0]['Actual_Study_Name'])
-        if not wellbased.empty:
-            studies.append(wellbased.iloc[0]['Actual_Study_Name'])
-        if not droplet.empty:
-            studies.append(droplet.iloc[0]['Actual_Study_Name'])  # Largest
-
-        CROSS_MECHANISM_STUDIES = studies
-
-        print(f"\n✓ Selected {len(studies)} studies:")
-        for study in studies:
-            print(f"  - {study}")
-
-    else:
-        print(f"⚠ Configuration file not found: {config_file}")
-        print(f"  Please run analyze_studies.py first")
-        print(f"\n  Or manually set CROSS_MECHANISM_STUDIES in this script")
-        sys.exit(1)
-
-
-def subset_to_cross_mechanism(adata, batch_key='Study'):
-    """
-    Subset dataset to cross-mechanism studies only.
+    Subset dataset to exactly two studies.
 
     Args:
         adata: Full AnnData object
+        study_a: First study name
+        study_b: Second study name
         batch_key: Column name for batch/study
 
     Returns:
-        Subset AnnData with only the selected studies
+        Subset AnnData with only two studies
     """
     print("\n" + "="*80)
-    print("SUBSETTING TO CROSS-MECHANISM STUDIES")
+    print("SUBSETTING TO TWO STUDIES (PAIRWISE COMPARISON)")
     print("="*80)
 
     print(f"\nOriginal dataset: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     print(f"Studies in original: {adata.obs[batch_key].nunique()}")
 
-    # Filter to selected studies
-    mask = adata.obs[batch_key].isin(CROSS_MECHANISM_STUDIES)
+    # Filter to two studies
+    mask = adata.obs[batch_key].isin([study_a, study_b])
     adata_subset = adata[mask].copy()
 
     print(f"\nSubset dataset: {adata_subset.n_obs:,} cells × {adata_subset.n_vars:,} genes")
     print(f"Studies in subset: {adata_subset.obs[batch_key].nunique()}")
 
-    # Show breakdown by study with technology classification
+    # Show breakdown by study
     print("\nCells per study:")
     study_counts = adata_subset.obs[batch_key].value_counts()
-
-    # Technology mapping for display
-    tech_map = {
-        'van_galen_2019': 'Non-droplet (Seq-Well)',
-        'zhai_2022': 'Non-droplet (SORT-Seq)',
-        'pei_2020': 'Non-droplet (CITEseq)',
-        'velten_2021': 'Non-droplet (Muta-Seq)',
-    }
-
     for study, count in study_counts.items():
-        tech_category = tech_map.get(study, "Droplet (10x Chromium)")
-        print(f"  {study}: {count:,} cells [{tech_category}]")
+        pct = 100 * count / adata_subset.n_obs
+        print(f"  {study}: {count:,} cells ({pct:.1f}%)")
+
+    # Check balance
+    counts = study_counts.values
+    ratio = counts.max() / counts.min() if counts.min() > 0 else float('inf')
+
+    print(f"\nBalance ratio: {ratio:.1f}x")
+    if ratio > 5:
+        print(f"  ⚠ Studies are unbalanced (>5x difference)")
+        print(f"    This may affect batch correction performance")
 
     # Remove unused categories
     adata_subset.obs[batch_key] = adata_subset.obs[batch_key].cat.remove_unused_categories()
@@ -158,26 +117,21 @@ def subset_to_cross_mechanism(adata, batch_key='Study'):
 
 def main():
     """
-    Main experiment pipeline for cross-mechanism batch correction.
+    Main experiment pipeline for pairwise batch correction.
     """
     print("="*80)
-    print("EXPERIMENT 1: CROSS-MECHANISM BATCH CORRECTION")
+    print("PAIRWISE BATCH CORRECTION COMPARISON")
     print("="*80)
-    print("\nObjective: Test batch correction across different scRNA-seq technologies")
-    print("  - Non-droplet technologies: Seq-Well, SORT-Seq, CITEseq, Muta-Seq")
-    print("  - Droplet-based technologies: 10x Genomics Chromium (largest studies)")
-    print("\nNote: This tests whether batch correction methods can handle")
-    print("      fundamental technology differences, not just experimental batches.")
+    print(f"\nComparing: {STUDY_A} vs {STUDY_B}")
+    print("\nObjective: Test batch correction on two studies")
+    print("  - Simpler than multi-batch (8 studies)")
+    print("  - Matches SCimilarity paper methodology")
+    print("  - Clearer interpretation of batch vs biology")
 
     # Check data file
     if not os.path.exists(DATA_PATH):
         print(f"\n✗ Data file not found: {DATA_PATH}")
         return
-
-    # Studies are hardcoded at the top of this file
-    print(f"\nUsing {len(CROSS_MECHANISM_STUDIES)} pre-selected studies:")
-    for study in CROSS_MECHANISM_STUDIES:
-        print(f"  - {study}")
 
     # STEP 1: Load data
     print("\n" + "="*80)
@@ -189,12 +143,11 @@ def main():
     print(f"Loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     print_memory()
 
-    # Detect batch and label keys and set them in run_evaluation module
+    # Detect batch and label keys
     run_evaluation.BATCH_KEY = detect_batch_key(adata)
     run_evaluation.LABEL_KEY = detect_label_key(adata)
     run_evaluation.BATCH_KEY_LOWER = run_evaluation.BATCH_KEY.lower()
 
-    # Also keep local references for convenience
     BATCH_KEY = run_evaluation.BATCH_KEY
     LABEL_KEY = run_evaluation.LABEL_KEY
     BATCH_KEY_LOWER = run_evaluation.BATCH_KEY_LOWER
@@ -202,21 +155,13 @@ def main():
     if BATCH_KEY_LOWER not in adata.obs.columns:
         adata.obs[BATCH_KEY_LOWER] = adata.obs[BATCH_KEY].copy()
 
-    # STEP 2: Subset to cross-mechanism studies
-    adata = subset_to_cross_mechanism(adata, BATCH_KEY)
+    # STEP 2: Subset to two studies
+    adata = subset_to_two_studies(adata, STUDY_A, STUDY_B, BATCH_KEY)
 
-    # CRITICAL: Load scVI NOW, before preprocessing changes cell counts
-    # At this point, cells are in same order as original data (just filtered by Study)
-    # We'll store original indices to map to scVI embeddings
+    # STEP 2.5: Load scVI (before preprocessing)
     print("\n" + "="*80)
     print("STEP 2.5: SCVI EMBEDDINGS (BEFORE PREPROCESSING)")
     print("="*80)
-
-    # Store original row positions before any filtering
-    # These correspond to positions in the scVI file
-    if not hasattr(adata, 'uns'):
-        adata.uns = {}
-    adata.uns['original_indices'] = np.arange(adata.n_obs)
 
     if os.path.exists(SCVI_PATH):
         try:
@@ -225,42 +170,28 @@ def main():
             print(f"  scVI: {adata_scvi.n_obs:,} cells × {adata_scvi.n_vars} features")
             print(f"  Main: {adata.n_obs:,} cells (after study subsetting)")
 
-            # Check if scVI file has numeric indices (computed on original data)
             scvi_has_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
 
             if scvi_has_numeric and adata_scvi.n_obs >= adata.n_obs:
-                print(f"  ✓ scVI uses numeric indices - assuming same order as original data")
-                print(f"  Strategy: Use row positions to match cells")
+                print(f"  ✓ scVI uses numeric indices - using row positions")
 
-                # Get Study info for each cell in current adata
-                studies_in_subset = adata.obs[BATCH_KEY].unique()
-                print(f"  Studies in current subset: {list(studies_in_subset)}")
-
-                # Load full data temporarily to get original indices
+                # Load full data to get original indices
                 print(f"  Loading original data to find cell positions...")
                 adata_full_temp = sc.read_h5ad(DATA_PATH)
 
-                # Find which rows in original data match our subset
-                mask = adata_full_temp.obs[BATCH_KEY].isin(studies_in_subset)
+                mask = adata_full_temp.obs[BATCH_KEY].isin([STUDY_A, STUDY_B])
                 original_indices = np.where(mask)[0]
 
-                print(f"  ✓ Found {len(original_indices):,} matching cells in original data")
-                print(f"  Index range: [{original_indices.min()}..{original_indices.max()}]")
+                print(f"  ✓ Found {len(original_indices):,} matching cells")
 
                 del adata_full_temp
                 force_cleanup()
 
-                # Subset scVI using original indices
                 if len(original_indices) == adata.n_obs:
-                    print(f"  Subsetting scVI embeddings using original indices...")
                     adata.obsm['X_scVI'] = adata_scvi.X[original_indices].copy()
                     print(f"  ✓ Added scVI embeddings: {adata.obsm['X_scVI'].shape}")
-                    print(f"  ✓ scVI range: [{adata.obsm['X_scVI'].min():.2f}, {adata.obsm['X_scVI'].max():.2f}]")
-                else:
-                    print(f"  ✗ Index count mismatch: {len(original_indices)} vs {adata.n_obs}")
             else:
-                print(f"  ⚠ scVI file format not compatible for automatic matching")
-                print(f"  Trying standard loading function...")
+                print(f"  ⚠ Using standard loading...")
                 adata = load_scvi_embedding(adata, SCVI_PATH)
 
             del adata_scvi
@@ -268,8 +199,6 @@ def main():
 
         except Exception as e:
             print(f"  ✗ Error loading scVI: {e}")
-            import traceback
-            traceback.print_exc()
     else:
         print(f"  ℹ scVI file not found: {SCVI_PATH}")
 
@@ -279,7 +208,7 @@ def main():
 
     # STEP 3: Preprocess
     print("\n" + "="*80)
-    print("STEP 2: PREPROCESSING")
+    print("STEP 3: PREPROCESSING")
     print("="*80)
 
     adata = preprocess_adata_exact(adata, BATCH_KEY_LOWER)
@@ -287,7 +216,7 @@ def main():
 
     # STEP 4: Uncorrected PCA
     print("\n" + "="*80)
-    print("STEP 3: UNCORRECTED PCA")
+    print("STEP 4: UNCORRECTED PCA")
     print("="*80)
 
     try:
@@ -298,9 +227,6 @@ def main():
         import traceback
         traceback.print_exc()
         return
-
-    # Note: scVI loading now happens BEFORE preprocessing (see STEP 2.5)
-    # This allows matching cells by original row positions
 
     # STEP 5: SCimilarity
     if SCIMILARITY_ENABLED and os.path.exists(SCIMILARITY_MODEL):
@@ -374,19 +300,19 @@ def main():
     # STEP 8: Save results
     if len(results) > 0:
         print("\n" + "="*80)
-        print("FINAL RESULTS - CROSS-MECHANISM")
+        print("FINAL RESULTS - PAIRWISE COMPARISON")
         print("="*80)
 
         combined = pd.concat(results.values(), keys=results.keys())
         combined.index = combined.index.droplevel(1)
 
         # Add metadata
-        combined['Experiment'] = 'Cross-Mechanism'
-        combined['N_studies'] = len(CROSS_MECHANISM_STUDIES)
+        combined['Experiment'] = 'Pairwise'
+        combined['Study_A'] = STUDY_A
+        combined['Study_B'] = STUDY_B
         combined['N_cells'] = adata.n_obs
-        combined['Studies'] = ', '.join(CROSS_MECHANISM_STUDIES)
 
-        output_file = os.path.join(OUTPUT_DIR, "cross_mechanism_results.csv")
+        output_file = os.path.join(OUTPUT_DIR, f"pairwise_{STUDY_A}_vs_{STUDY_B}.csv")
         combined.to_csv(output_file)
         print(f"\n✓ Results saved: {output_file}")
 
@@ -394,10 +320,13 @@ def main():
         print("SUMMARY")
         print("="*80)
 
+        print(f"\nComparison: {STUDY_A} vs {STUDY_B}")
+        print(f"Cells: {adata.n_obs:,}")
+
         print(f"\n{'Method':<20s} {'Total':>10s} {'Batch':>10s} {'Bio':>10s}")
         print("-" * 52)
 
-        for method in combined.index[:len(results)]:  # Only show methods, not duplicates
+        for method in combined.index[:len(results)]:
             total = combined.loc[method, 'Total']
             batch = combined.loc[method, 'Batch correction']
             bio = combined.loc[method, 'Bio conservation']
@@ -407,20 +336,21 @@ def main():
         print("\n" + "="*80)
         print("INTERPRETATION")
         print("="*80)
-        print("\nCross-mechanism batch correction is HARDER than within-mechanism because:")
-        print("  • Different technologies have different gene detection rates")
-        print("  • Library prep differences create systematic biases")
-        print("  • Technical variation can be as large as biological variation")
+        print("\nPairwise comparison advantages:")
+        print("  • Simpler task - only 2 batches to mix")
+        print("  • Clearer interpretation - biology vs batch")
+        print("  • Matches SCimilarity paper methodology")
+        print("  • Less advantage for multi-batch optimizers")
         print("\nExpected results:")
-        print("  • Lower batch correction scores than within-mechanism")
-        print("  • Greater challenge for all methods")
-        print("  • Some cell types may cluster by technology rather than biology")
+        print("  • SCimilarity should be more competitive")
+        print("  • Batch correction scores should be higher overall")
+        print("  • Easier to verify if cells cluster by biology")
 
     print("\n" + "="*80)
-    print("✓ EXPERIMENT 1 COMPLETE")
+    print("✓ PAIRWISE EXPERIMENT COMPLETE")
     print("="*80)
     print(f"\nResults saved to: {OUTPUT_DIR}/")
-    print("\nNext: Run experiment_within_mechanism.py to compare with within-mechanism correction")
+    print(f"\nTo test another pair, edit STUDY_A and STUDY_B at top of script")
 
 
 if __name__ == "__main__":

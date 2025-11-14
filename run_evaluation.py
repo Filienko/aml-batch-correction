@@ -337,16 +337,39 @@ def load_scvi_embedding(adata, scvi_path="data/AML_scAtlas_X_scVI.h5ad"):
                     pass
                 # Fall through to mismatch handling
 
-        # Case 3: Different counts - find common cells
+        # Case 3: Different counts - find common cells OR use numeric indices
         print(f"  ⚠ Cell count mismatch")
         print(f"  Searching for common cells...")
-        
+
         common_cells = adata.obs_names.intersection(adata_scvi.obs_names)
-        
+
         if len(common_cells) == 0:
-            print(f"  ✗ No common cells found!")
-            print(f"  Skipping scVI evaluation")
-            return adata
+            print(f"  ✗ No common cells found by name matching")
+
+            # Check if scVI uses numeric indices (common when computed on full data)
+            print(f"  ℹ Checking if scVI file uses numeric indices...")
+            scvi_ids_numeric = all(str(idx).isdigit() for idx in adata_scvi.obs_names[:100])
+
+            if scvi_ids_numeric:
+                print(f"  ✓ scVI file uses numeric indices")
+                print(f"  ⚠ scVI: {adata_scvi.n_obs:,} cells, Current: {adata.n_obs:,} cells")
+                print(f"")
+                print(f"  ✗ CANNOT LOAD: scVI was computed on full dataset,")
+                print(f"    but current data is a SUBSET (e.g., specific studies only).")
+                print(f"")
+                print(f"  SOLUTIONS:")
+                print(f"    1. Compute scVI on this specific subset, OR")
+                print(f"    2. Run scVI on full data first, then subset BOTH,")
+                print(f"    3. Use scVI only for full-dataset experiments")
+                print(f"")
+                print(f"  Skipping scVI for this experiment.")
+                del adata_scvi
+                force_cleanup()
+                return adata
+            else:
+                print(f"  ✗ Cannot match cells - different naming and counts")
+                print(f"  Skipping scVI evaluation")
+                return adata
         
         print(f"  Found {len(common_cells):,} common cells ({100*len(common_cells)/adata.n_obs:.1f}%)")
         
@@ -552,6 +575,75 @@ def compute_scimilarity_corrected(adata, model_path, batch_size=1000):
     print("="*80)
     
     return adata
+
+# ============================================================================
+# HARMONY BATCH CORRECTION
+# ============================================================================
+
+def compute_harmony_corrected(adata, batch_key, n_jobs=8):
+    """
+    Compute Harmony batch correction.
+
+    Harmony is a fast integration method that works directly on PCA embeddings.
+    It iteratively adjusts principal components to remove batch effects while
+    preserving biological variation.
+
+    Reference: Korsunsky et al. (2019) Nature Methods
+    """
+    print("\n" + "="*80)
+    print("HARMONY BATCH CORRECTION")
+    print("="*80)
+    print_memory()
+
+    try:
+        # Harmony requires PCA as input
+        if 'X_pca' not in adata.obsm:
+            print("  ✗ X_pca not found! Run uncorrected PCA first.")
+            return adata
+
+        print(f"  Input: X_pca with shape {adata.obsm['X_pca'].shape}")
+        print(f"  Batch key: {batch_key}")
+        print(f"  Batches: {adata.obs[batch_key].nunique()}")
+
+        # Create working copy to avoid modifying the original
+        adata_work = adata.copy()
+
+        print("\n  Running Harmony integration...")
+        import time
+        start = time.time()
+
+        # Run Harmony
+        sc.external.pp.harmony_integrate(
+            adata_work,
+            batch_key,
+            basis='X_pca',
+            adjusted_basis='X_harmony',
+            max_iter_harmony=10,
+            verbose=False
+        )
+
+        elapsed = int(time.time() - start)
+        print(f"  ✓ Completed in {elapsed // 60}m {elapsed % 60}s")
+
+        # Copy result back to original adata
+        adata.obsm['X_harmony'] = adata_work.obsm['X_harmony'].copy()
+
+        print(f"  ✓ Harmony embedding: {adata.obsm['X_harmony'].shape}")
+
+        del adata_work
+        force_cleanup()
+
+        print("✓ Harmony complete!")
+        print_memory()
+
+        return adata
+
+    except Exception as e:
+        print(f"  ✗ Harmony failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return adata
+
 
 # ============================================================================
 # BENCHMARKING
