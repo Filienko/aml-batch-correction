@@ -358,10 +358,14 @@ def validate_marker_enrichment_per_method(adata, embedding_key, method_name, ref
     else:
         X = adata.X
 
-    # Train k-NN on reference
-    ref_mask = adata.obs['Study'] == ref_study
+    # Train k-NN on reference (filter out NaN labels!)
+    ref_mask = (adata.obs['Study'] == ref_study) & (adata.obs['van_galen_subtype'].notna())
     ref_embedding = adata.obsm[embedding_key][ref_mask]
     ref_labels = adata.obs['van_galen_subtype'][ref_mask].values
+
+    print(f"\nReference: {ref_study}")
+    print(f"  Cells with labels: {ref_mask.sum():,}")
+    print(f"  Subtypes: {len(np.unique(ref_labels))}")
 
     knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
     knn.fit(ref_embedding, ref_labels)
