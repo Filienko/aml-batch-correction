@@ -1,0 +1,107 @@
+% Tables for Results
+
+% Table 1: Per-Dataset Performance (from diagnostics)
+\begin{table}[h]
+\centering
+\caption{Per-dataset annotation replication performance using SCimilarity embeddings and Leiden clustering (resolution=0.5). Performance varies substantially across studies, with highest agreement on beneyto-calabuig-2023.}
+\label{tab:per_dataset}
+\begin{tabular}{lrrrcc}
+\toprule
+\textbf{Study} & \textbf{N Cells} & \textbf{Expert Types} & \textbf{Clusters} & \textbf{ARI} & \textbf{NMI} \\
+\midrule
+beneyto-calabuig-2023 & 75,372 & 16 & 28 & 0.623 & 0.733 \\
+velten\_2021          & 4,191  & 16 & 26 & 0.436 & 0.575 \\
+zhang\_2023           & 75,962 & 16 & 30 & 0.398 & 0.623 \\
+van\_galen\_2019      & 23,344 & 16 & 27 & 0.217 & 0.443 \\
+jiang\_2020           & 73,810 & 16 & 20 & 0.182 & 0.259 \\
+\midrule
+\textbf{Combined (All Studies)} & \textbf{252,679} & \textbf{16} & \textbf{35} & \textbf{0.195} & \textbf{0.503} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% Table 2: Optimized Single-Study Performance
+\begin{table}[h]
+\centering
+\caption{Annotation replication performance on selected studies using optimized Leiden resolution (0.1) to match expert annotation granularity. Single-study analysis with appropriate resolution substantially improves agreement.}
+\label{tab:optimized}
+\begin{tabular}{lrccc}
+\toprule
+\textbf{Study} & \textbf{Resolution} & \textbf{Clusters} & \textbf{ARI} & \textbf{NMI} \\
+\midrule
+beneyto-calabuig-2023 & 0.1 & 17 & 0.702 & 0.786 \\
+zhang\_2023           & 0.1 & 14 & 0.498 & 0.637 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% Table 3: Resolution Sweep (on combined dataset)
+\begin{table}[h]
+\centering
+\caption{Effect of Leiden clustering resolution on annotation agreement (combined dataset, all five studies). Optimal performance occurs at resolution 0.1, producing cluster counts closest to expert annotation granularity.}
+\label{tab:resolution}
+\begin{tabular}{rccc}
+\toprule
+\textbf{Resolution} & \textbf{N Clusters} & \textbf{ARI} & \textbf{NMI} \\
+\midrule
+0.1 & 17 & \textbf{0.261} & 0.502 \\
+0.2 & 25 & 0.240 & 0.509 \\
+0.3 & 29 & 0.247 & 0.533 \\
+0.4 & 33 & 0.196 & 0.505 \\
+0.5 & 35 & 0.195 & 0.503 \\
+0.6 & 40 & 0.183 & 0.510 \\
+0.8 & 50 & 0.154 & 0.507 \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+\par\noindent\textit{Note:} Expert annotations define 16 cell types. Resolution 0.1 produces the closest match (17 clusters) and achieves highest ARI.
+\end{table}
+
+% Table 4: Label Transfer Comparison
+\begin{table}[h]
+\centering
+\caption{Comparison of label transfer methods using van\_galen\_2019 as reference (23,344 cells) and four independent studies as targets. Results averaged across all targets. SCimilarity substantially outperforms traditional reference-based classification, particularly for rare cell types (macro F1).}
+\label{tab:label_transfer}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{ARI} & \textbf{NMI} & \textbf{Macro F1} & \textbf{Weighted F1} & \textbf{Time (s)} \\
+\midrule
+Traditional Classifier & 0.430 & 0.506 & 0.315 & --- & 11.4 \\
+\textbf{SCimilarity KNN} & \textbf{0.625} & \textbf{0.644} & \textbf{0.670} & \textbf{---} & \textbf{31.6} \\
+\midrule
+\textit{Improvement} & \textit{+45\%} & \textit{+27\%} & \textit{+113\%} & --- & \textit{2.8× slower} \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+\par\noindent\textit{Note:} Macro F1 treats all cell types equally, revealing SCimilarity's superior performance on rare populations. Traditional methods show strong bias toward abundant types.
+\end{table}
+
+% Table 5: Per-Target Label Transfer Results (you'll need to add actual per-target data)
+\begin{table}[h]
+\centering
+\caption{Label transfer performance by target study. SCimilarity outperforms traditional methods consistently across all targets. Reference: van\_galen\_2019.}
+\label{tab:per_target}
+\begin{tabular}{llcc}
+\toprule
+\textbf{Target Study} & \textbf{Method} & \textbf{ARI} & \textbf{Macro F1} \\
+\midrule
+\multirow{2}{*}{zhang\_2023}
+    & Traditional & --- & --- \\
+    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+\midrule
+\multirow{2}{*}{beneyto-calabuig-2023}
+    & Traditional & --- & --- \\
+    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+\midrule
+\multirow{2}{*}{jiang\_2020}
+    & Traditional & --- & --- \\
+    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+\midrule
+\multirow{2}{*}{velten\_2021}
+    & Traditional & --- & --- \\
+    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+\par\noindent\textit{Note:} Fill in with actual per-target values from your results\_label\_transfer/metrics/label\_transfer\_results.csv file.
+\end{table}

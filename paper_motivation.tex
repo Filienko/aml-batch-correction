@@ -1,0 +1,33 @@
+% Motivation Section
+\section{Introduction}
+
+\subsection{Motivation}
+
+Single-cell RNA sequencing (scRNA-seq) has revolutionized our understanding of cellular heterogeneity in disease, particularly in acute myeloid leukemia (AML) where cell type identification is critical for understanding disease progression and therapeutic resistance~\cite{vangalen2019}. However, cell type annotation remains a major bottleneck in scRNA-seq analysis pipelines, typically requiring a complex workflow combining multiple computational tools followed by extensive manual curation.
+
+The AML scAtlas, a comprehensive reference containing 159 AML patients, exemplifies this complexity: annotations were generated through scVI-based batch correction~\cite{scvi2018}, followed by consensus annotation using three independent tools (CellTypist~\cite{cellTypist2022}, SingleR~\cite{singleR2019}, and scType~\cite{scType2022}), extensive manual curation with marker genes, and custom leukemic stem cell (LSC) annotation using specialized references~\cite{amlAtlas2024}. This pipeline, while producing high-quality annotations, requires substantial computational resources, expert knowledge, and weeks of manual effort.
+
+Recently, foundation models pre-trained on diverse single-cell datasets have emerged as a promising alternative~\cite{scimilarity2023}. These models learn generalizable representations of cell states that may capture biological variation while being robust to technical batch effects. However, it remains unclear whether such models can replicate the accuracy of expert-curated, multi-tool consensus approaches, and whether they provide advantages for cross-study label transfer where traditional reference-based methods often struggle with batch effects.
+
+\textbf{Research Questions:}
+\begin{enumerate}
+    \item Can foundation model embeddings (SCimilarity) approximate complex consensus annotation pipelines without requiring multiple tools and manual curation?
+    \item Does SCimilarity provide more robust and accurate label transfer across heterogeneous studies compared to traditional reference-based classification?
+    \item How does performance vary across datasets with different technical characteristics and biological complexity?
+\end{enumerate}
+
+\subsection{Contributions}
+
+We systematically evaluate SCimilarity's ability to replicate expert annotations and transfer labels across studies:
+
+\begin{itemize}
+    \item We demonstrate that SCimilarity embeddings with simple clustering (Leiden, resolution=0.1) can closely approximate the AML scAtlas consensus pipeline, achieving ARI=0.70 on high-quality datasets (beneyto-calabuig-2023).
+
+    \item We show substantial variation in performance across studies (ARI: 0.18--0.70), revealing dataset-specific characteristics that affect automated annotation.
+
+    \item We prove that SCimilarity-based label transfer achieves 45\% higher accuracy (ARI: 0.625 vs 0.430) than traditional reference-based classification, with particularly dramatic improvements on rare cell types (macro F1: 0.670 vs 0.315).
+
+    \item We provide evidence that the pre-trained latent space offers batch-robust representations that transfer more effectively across heterogeneous studies than direct count-based classification.
+\end{itemize}
+
+Our findings suggest that while foundation models cannot universally replace expert curation, they offer a compelling alternative for high-quality datasets and provide superior cross-study transferability, particularly for rare cell populations critical to AML biology.

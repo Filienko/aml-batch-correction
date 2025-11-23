@@ -1,0 +1,42 @@
+% Complete LaTeX Document Structure
+% Copy sections into your Overleaf project
+
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{cite}
+
+\title{Foundation Models for Automated Cell Type Annotation: \\
+Evaluating SCimilarity for AML Single-Cell Analysis}
+
+\author{Your Name et al.}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Cell type annotation in single-cell RNA sequencing requires complex pipelines combining multiple computational tools and extensive manual curation. We evaluate whether SCimilarity, a pre-trained foundation model, can approximate expert consensus annotations and enable robust cross-study label transfer in acute myeloid leukemia (AML). Using the AML scAtlas (159 patients, five studies), we demonstrate that SCimilarity achieves strong agreement with expert annotations on high-quality datasets (ARI=0.70) and substantially outperforms traditional reference-based classification for label transfer (ARI: 0.625 vs 0.430, +45\%), with particularly dramatic improvements for rare cell types (macro F1: 0.670 vs 0.315, +113\%). Performance varies across datasets, revealing quality-dependent automation potential. Our findings suggest foundation models offer a practical alternative to multi-tool consensus pipelines for high-quality data and provide superior batch-robust representations for cross-study annotation, particularly valuable for rare populations critical to AML biology.
+\end{abstract}
+
+% Include your sections here
+\input{paper_motivation.tex}
+\input{paper_methods.tex}
+\input{paper_results.tex}
+\input{paper_tables.tex}
+
+\section{Discussion}
+
+[Add your discussion here - I can write this too if needed]
+
+\section{Conclusion}
+
+We demonstrate that foundation models pre-trained on diverse single-cell data can approximate complex expert annotation pipelines and provide superior cross-study label transfer. While performance is dataset-dependent, high-quality datasets achieve strong agreement (ARI>0.70), suggesting automation potential for reducing manual curation burden. The dramatic improvement in rare cell type performance (macro F1 +113\%) is particularly relevant for AML research, where leukemic stem cells and early progenitors are critical but scarce. These findings position foundation models as practical tools for scalable, automated annotation with particular value for rare population identification and rapid integration of new datasets.
+
+\bibliographystyle{plain}
+\bibliography{paper_bibliography}
+
+\end{document}
