@@ -76,32 +76,32 @@ Traditional Classifier & 0.430 & 0.506 & 0.315 & --- & 11.4 \\
 \par\noindent\textit{Note:} Macro F1 treats all cell types equally, revealing SCimilarity's superior performance on rare populations. Traditional methods show strong bias toward abundant types.
 \end{table}
 
-% Table 5: Per-Target Label Transfer Results (you'll need to add actual per-target data)
+% Table 5: Per-Target Label Transfer Results
 \begin{table}[h]
 \centering
-\caption{Label transfer performance by target study. SCimilarity outperforms traditional methods consistently across all targets. Reference: van\_galen\_2019.}
+\caption{Label transfer performance by target study. SCimilarity outperforms traditional methods consistently across all targets, with particularly strong performance on beneyto-calabuig-2023 (ARI=0.852). Reference: van\_galen\_2019 (23,344 cells).}
 \label{tab:per_target}
-\begin{tabular}{llcc}
+\begin{tabular}{llccc}
 \toprule
-\textbf{Target Study} & \textbf{Method} & \textbf{ARI} & \textbf{Macro F1} \\
+\textbf{Target Study} & \textbf{Method} & \textbf{ARI} & \textbf{Macro F1} & \textbf{Improvement} \\
 \midrule
 \multirow{2}{*}{zhang\_2023}
-    & Traditional & --- & --- \\
-    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+    & Traditional & 0.601 & 0.354 & --- \\
+    & \textbf{SCimilarity} & \textbf{0.736} & \textbf{0.703} & \textbf{+22\% / +99\%} \\
 \midrule
 \multirow{2}{*}{beneyto-calabuig-2023}
-    & Traditional & --- & --- \\
-    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+    & Traditional & 0.614 & 0.357 & --- \\
+    & \textbf{SCimilarity} & \textbf{0.852} & \textbf{0.772} & \textbf{+39\% / +116\%} \\
 \midrule
 \multirow{2}{*}{jiang\_2020}
-    & Traditional & --- & --- \\
-    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+    & Traditional & 0.108 & 0.242 & --- \\
+    & \textbf{SCimilarity} & \textbf{0.257} & \textbf{0.585} & \textbf{+138\% / +142\%} \\
 \midrule
 \multirow{2}{*}{velten\_2021}
-    & Traditional & --- & --- \\
-    & \textbf{SCimilarity} & \textbf{---} & \textbf{---} \\
+    & Traditional & 0.396 & 0.307 & --- \\
+    & \textbf{SCimilarity} & \textbf{0.655} & \textbf{0.619} & \textbf{+65\% / +102\%} \\
 \bottomrule
 \end{tabular}
 \vspace{0.5em}
-\par\noindent\textit{Note:} Fill in with actual per-target values from your results\_label\_transfer/metrics/label\_transfer\_results.csv file.
+\par\noindent\textit{Note:} Improvement shows ARI\% / Macro F1\% increase. SCimilarity achieves superior performance across all four targets, with ARI improvements ranging from 22\% to 138\% and macro F1 improvements from 99\% to 142\%.
 \end{table}
