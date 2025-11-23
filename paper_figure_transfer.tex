@@ -1,0 +1,77 @@
+% TikZ Label Transfer Figure
+% Shows the concept of transferring labels from reference to target
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=2cm,
+    data/.style={cylinder, draw, shape border rotate=90, minimum height=1.5cm, minimum width=2cm, fill=blue!10},
+    method/.style={rectangle, draw, rounded corners, minimum width=3cm, minimum height=1cm, align=center, fill=orange!20},
+    space/.style={ellipse, draw, minimum width=4cm, minimum height=3cm, fill=gray!10},
+    arrow/.style={->, thick},
+    label/.style={font=\footnotesize}
+]
+
+% Reference and Target data
+\node[data] (ref) at (0, 4) {van Galen\\23k cells\\16 types};
+\node[data] (target) at (0, 0) {Target Study\\50k+ cells\\? types};
+
+% Traditional Method (Left side)
+\node[method] (trad_train) at (-4, 4) {Train RF\\on counts};
+\node[method] (trad_pred) at (-4, 0) {Predict\\on counts};
+
+\draw[arrow] (ref) -- (trad_train);
+\draw[arrow] (target) -- (trad_pred);
+\draw[arrow, dashed] (trad_train) -- node[left, font=\tiny] {classifier} (trad_pred);
+
+\node[label] at (-4, 5) {\textbf{Traditional}};
+\node[font=\tiny, text=red, align=center] at (-4, -1) {Batch\\sensitive};
+
+% SCimilarity Method (Right side)
+\node[space] (latent) at (5, 2) {};
+\node[font=\small] at (5, 2) {SCimilarity\\Latent Space};
+
+\node[method] (scim_ref) at (5, 4.5) {Project\\reference};
+\node[method] (scim_target) at (5, -0.5) {Project\\target};
+\node[method] (knn) at (5, 2) {KNN\\k=15};
+
+\draw[arrow] (ref) -- (scim_ref);
+\draw[arrow] (target) -- (scim_target);
+\draw[arrow] (scim_ref) -- (knn);
+\draw[arrow] (scim_target) -- (knn);
+
+\node[label] at (5, 5.5) {\textbf{SCimilarity KNN}};
+\node[font=\tiny, text=green!60!black, align=center] at (5, -1.5) {Batch\\robust};
+
+% Results comparison
+\node[draw, rectangle, minimum width=3cm, minimum height=3.5cm, fill=yellow!10] at (9.5, 2) {
+    \textbf{Results:}\\[0.3cm]
+    \small
+    \textbf{ARI:}\\
+    Trad: 0.430\\
+    Scim: 0.625\\
+    \textcolor{green!60!black}{+45\%}\\[0.2cm]
+
+    \textbf{Macro F1:}\\
+    Trad: 0.315\\
+    Scim: 0.670\\
+    \textcolor{green!60!black}{+113\%}
+};
+
+% Cell type representation in latent space (visualization)
+\node[circle, draw, fill=red!30, inner sep=1pt] at (4.2, 3.5) {};
+\node[circle, draw, fill=red!30, inner sep=1pt] at (4.5, 3.3) {};
+\node[font=\tiny] at (3.5, 3.5) {HSC};
+
+\node[circle, draw, fill=blue!30, inner sep=1pt] at (5.8, 2.8) {};
+\node[circle, draw, fill=blue!30, inner sep=1pt] at (6.0, 2.5) {};
+\node[font=\tiny] at (6.5, 2.8) {Mono};
+
+\node[circle, draw, fill=green!30, inner sep=1pt] at (4.5, 1.2) {};
+\node[circle, draw, fill=green!30, inner sep=1pt] at (4.8, 0.9) {};
+\node[font=\tiny] at (4.0, 1.0) {GMP};
+
+\end{tikzpicture}
+\caption{Label transfer methodology comparison. \textbf{Left:} Traditional reference-based classification trains a Random Forest on normalized gene expression counts, which is sensitive to batch effects and technical differences between studies. \textbf{Right:} SCimilarity projects both reference and target to a shared pre-trained latent space where cell types cluster by biology rather than technical factors, enabling robust k-nearest neighbors label transfer. The latent space representation (gray ellipse) shows cell types clustering together across studies. SCimilarity achieves 45\% higher ARI and 113\% higher macro F1, demonstrating superior transferability and rare cell type performance.}
+\label{fig:transfer}
+\end{figure}

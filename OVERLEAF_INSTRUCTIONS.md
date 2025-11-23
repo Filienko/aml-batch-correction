@@ -8,12 +8,14 @@
 4. **paper_results.tex** - Results section
 5. **paper_tables.tex** - All results tables
 6. **paper_bibliography.bib** - Bibliography entries
+7. **paper_figure_pipeline.tex** - TikZ figure showing traditional vs SCimilarity pipeline
+8. **paper_figure_transfer.tex** - TikZ figure showing label transfer methodology
 
 ## How to Use in Overleaf
 
 ### Option 1: Upload All Files
 1. Create new Overleaf project
-2. Upload all 6 .tex and .bib files
+2. Upload all 8 .tex and .bib files (including the two TikZ figure files)
 3. Set **paper_main.tex** as main document
 4. Compile
 
@@ -48,21 +50,37 @@ Fill in the --- placeholders in paper_tables.tex with actual ARI and Macro F1 va
 
 ## Figures to Add
 
-You should create figures from your results and reference them:
+### TikZ Figures (Already Created!)
 
-1. **Figure 1**: Resolution sweep plot
+**Figure 1: Pipeline Comparison** - Add after Introduction section:
+```latex
+\input{paper_figure_pipeline.tex}
+```
+This shows the traditional (scVI + consensus) vs SCimilarity (direct embedding) pipelines.
+
+**Figure 2: Label Transfer Methodology** - Add in Methods section:
+```latex
+\input{paper_figure_transfer.tex}
+```
+This visualizes the label transfer comparison between traditional RF and SCimilarity KNN.
+
+### Optional: Data Figures from Results
+
+If you want to add plots from your experimental results:
+
+1. **Resolution sweep plot**
    - From: results_scimilarity_diagnostics/resolution_sweep.pdf
    - Shows optimal resolution selection
 
-2. **Figure 2**: Label transfer comparison
+2. **Label transfer comparison**
    - From: results_label_transfer/figures/label_transfer_comparison.pdf
    - Bar charts comparing methods
 
-3. **Figure 3**: Heatmap
+3. **Heatmap**
    - From: results_label_transfer/figures/label_transfer_heatmap.pdf
    - ARI by target study
 
-Add in Results section with:
+Add these with:
 ```latex
 \begin{figure}[h]
 \centering
