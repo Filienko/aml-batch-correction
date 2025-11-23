@@ -7,15 +7,16 @@
 3. **paper_methods.tex** - Methods section
 4. **paper_results.tex** - Results section
 5. **paper_tables.tex** - All results tables
-6. **paper_bibliography.bib** - Bibliography entries
-7. **paper_figure_pipeline.tex** - TikZ figure showing traditional vs SCimilarity pipeline
-8. **paper_figure_transfer.tex** - TikZ figure showing label transfer methodology
+6. **paper_discussion.tex** - Discussion section with implications, limitations, and future directions
+7. **paper_bibliography.bib** - Bibliography entries
+8. **paper_figure_pipeline.tex** - TikZ figure showing traditional vs SCimilarity pipeline
+9. **paper_figure_transfer.tex** - TikZ figure showing label transfer methodology
 
 ## How to Use in Overleaf
 
 ### Option 1: Upload All Files
 1. Create new Overleaf project
-2. Upload all 8 .tex and .bib files (including the two TikZ figure files)
+2. Upload all 9 .tex and .bib files (including TikZ figures and discussion)
 3. Set **paper_main.tex** as main document
 4. Compile
 
@@ -104,10 +105,9 @@ Or just use Overleaf's compile button!
 
 1. Upload to Overleaf
 2. Update citations (scimilarity2023, amlAtlas2024)
-3. Fill in Table 5 with per-target values
-4. Add figures
-5. Write Discussion section (I can help!)
-6. Proofread and adjust
+3. Fill in Table 5 with per-target values (already done, but verify)
+4. Add optional data figures if desired (resolution sweep, heatmaps, etc.)
+5. Proofread and adjust wording/framing as needed
 
 ## Tips
 

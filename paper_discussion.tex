@@ -1,0 +1,51 @@
+\section{Discussion}
+
+\subsection{Foundation Models as Annotation Automation Tools}
+
+Our results demonstrate that SCimilarity, a pre-trained foundation model for single-cell transcriptomics, can effectively approximate expert consensus annotations derived from multi-tool pipelines in acute myeloid leukemia datasets. On high-quality data (beneyto-calabuig-2023), SCimilarity achieved ARI=0.70 with expert annotations—a strong agreement given that these "ground truth" labels themselves represent consensus outputs from CellTypist, SingleR, and scType with manual curation. This performance suggests that foundation models can serve as practical alternatives to complex annotation workflows for high-quality datasets, reducing annotation time from weeks to minutes.
+
+However, the quality-dependent variation in performance (ARI ranging from 0.18 to 0.70 across datasets) reveals an important limitation: not all datasets are equally amenable to automated annotation. The zhang\_2023 dataset, despite being from the atlas publication itself, achieved only ARI=0.50, while older studies (jiang\_2020, velten\_2021) showed even lower agreement. This variation likely reflects differences in dataset quality, cell type composition complexity, and the degree of manual curation invested in the original annotations. Foundation models appear most reliable as automation tools for well-processed, high-coverage datasets rather than universal replacements for expert annotation.
+
+\subsection{Batch Robustness: The Critical Advantage}
+
+The label transfer experiments reveal the most compelling advantage of foundation models: superior robustness to batch effects. SCimilarity achieved 45\% higher ARI (0.625 vs 0.430) and more than doubled macro F1 scores (0.670 vs 0.315, +113\%) compared to traditional Random Forest classification on raw counts. This dramatic improvement, particularly for rare cell types, highlights a fundamental limitation of traditional reference-based methods like SingleR and Seurat.
+
+Traditional approaches operate in gene expression space, where technical batch effects—sequencing platform differences, processing protocols, ambient RNA contamination—can dominate biological signals. A cell type signature learned from one study may fail to transfer to another due to systematic technical differences, even when the underlying biology is identical. Foundation models, trained on diverse datasets spanning multiple platforms and tissues, learn representations that are inherently more robust to these technical variations. The pre-trained SCimilarity embeddings appear to capture biological cell type identity while factoring out batch-specific technical noise.
+
+This advantage is particularly critical for rare cell types, as evidenced by the 113\% improvement in macro F1. Rare populations like hematopoietic stem cells, early progenitors, or leukemic stem cells constitute small fractions of samples but carry disproportionate biological importance in AML. Traditional methods, which weight performance by cell type frequency, may achieve acceptable overall accuracy while failing catastrophically on these rare but critical populations. The macro F1 metric, which treats all cell types equally, reveals that SCimilarity maintains strong performance across all populations—precisely what is needed for comprehensive AML characterization.
+
+\subsection{Practical Implications for AML Research}
+
+For AML single-cell studies, our findings suggest a two-tier annotation strategy:
+
+\textbf{New dataset annotation:} For high-quality datasets with good coverage, SCimilarity direct embedding followed by Leiden clustering (resolution $\approx$ 0.1) can produce biologically meaningful cell type assignments in minutes, serving as either final annotations or high-quality initialization for expert refinement. For lower-quality or unusual datasets, traditional multi-tool consensus pipelines remain advisable.
+
+\textbf{Cross-study integration:} For projects requiring annotation transfer across multiple studies—meta-analyses, atlas construction, cross-cohort comparisons—SCimilarity-based label transfer offers substantial advantages over traditional reference mapping. The batch robustness ensures that rare populations are reliably identified across technical contexts, critical for studying therapy-resistant cell states or minimal residual disease.
+
+The computational cost trade-off (SCimilarity 2.8$\times$ slower than Random Forest: 31.6s vs 11.4s) is minimal in practice. For reference-based annotation of a single target dataset, the time difference is negligible. For projects annotating multiple targets from the same reference, the embedding computation is amortized—embeddings are computed once per dataset and reused for all transfers, making the per-comparison cost competitive.
+
+\subsection{Limitations and Caveats}
+
+\textbf{Cell type coverage:} SCimilarity's performance is constrained by its training data. For novel cell types absent from the model's training corpus, the embeddings may not capture relevant biological variation. AML-specific leukemic stem cell subtypes or rare therapy-induced cell states might require specialized models or traditional annotation.
+
+\textbf{"Ground truth" assumptions:} Our evaluation treats atlas consensus annotations as ground truth, but these labels themselves have limitations. CellTypist, SingleR, and scType can produce inconsistent predictions, and manual curation introduces subjective judgment. True biological validation requires marker gene expression verification, functional assays, or independent expert review—analyses beyond this study's scope. We demonstrate replication of computational consensus, not necessarily biological accuracy.
+
+\textbf{Resolution parameter sensitivity:} Optimal Leiden resolution varies by dataset (0.1 worked well here but may differ for other tissues or disease contexts). Systematic resolution optimization, while straightforward, adds a hyperparameter tuning step that reduces the "push-button" simplicity of foundation model annotation.
+
+\textbf{Model versioning and updates:} Foundation models evolve—SCimilarity v1.1 used here will eventually be superseded by v2.0, v3.0, etc. Annotations produced by different model versions may not be directly comparable, creating potential reproducibility challenges for longitudinal studies. Clear version documentation is essential.
+
+\subsection{Future Directions}
+
+\textbf{Cell type-specific validation:} Future work should validate annotations against orthogonal data: surface marker expression (CITE-seq), spatial localization (spatial transcriptomics), or functional assays. Quantifying how well SCimilarity clusters align with CD34+CD38- immunophenotypes for LSCs, for example, would strengthen biological confidence.
+
+\textbf{Rare population focus:} Given the dramatic rare cell type performance advantage, dedicated studies on minimal residual disease detection, therapy-resistant cell identification, and stem cell characterization using foundation model embeddings could reveal clinical applications.
+
+\textbf{Active learning integration:} Combining foundation model initialization with targeted expert review—where the model flags low-confidence predictions for human inspection—could optimize the accuracy-effort trade-off. Most cells receive automated annotation; only ambiguous cases require manual curation.
+
+\textbf{Disease-specific fine-tuning:} While pre-trained SCimilarity performs well, fine-tuning on AML-specific datasets might further improve performance. Domain adaptation techniques could enhance rare leukemic subtype discrimination while retaining batch robustness.
+
+\textbf{Multi-modal extensions:} As multi-modal single-cell technologies mature (CITE-seq, ASAP-seq, spatial transcriptomics), foundation models that integrate RNA, protein, and spatial information could provide even more robust cell type representations.
+
+\subsection{Conclusion}
+
+Foundation models like SCimilarity offer a practical path toward automated, batch-robust cell type annotation in single-cell transcriptomics. For AML research, they enable rapid annotation of high-quality datasets and dramatically improve cross-study label transfer, particularly for rare but biologically critical cell populations. While not universal replacements for expert curation, these models provide powerful tools for accelerating annotation workflows and improving multi-study integration—essential capabilities as single-cell atlases scale to thousands of samples across diverse cohorts. The 113\% improvement in rare cell type identification suggests that foundation models may become indispensable for comprehensive characterization of cellular heterogeneity in cancer.
