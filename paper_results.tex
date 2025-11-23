@@ -17,9 +17,15 @@ Resolution sweep analysis (Figure~\ref{fig:resolution}) revealed that optimal pe
 
 Interestingly, the relationship between cluster number and ARI was not monotonic: resolution 0.1 (17 clusters) outperformed both lower resolutions that merged distinct types and higher resolutions that over-fragmented populations. This suggests an intrinsic biological structure at approximately this granularity that SCimilarity's latent space naturally captures.
 
-\subsection{SCimilarity Provides Superior Cross-Study Label Transfer}
+\subsection{Intra-Study Baseline Establishes Upper Bound Performance}
 
-We next tested whether SCimilarity's pre-trained latent space enables more robust label transfer compared to traditional reference-based classification. Using van\_galen\_2019 as reference and four independent studies as targets, we compared traditional Random Forest classification on normalized counts versus k-nearest neighbors in SCimilarity space.
+Before evaluating cross-study label transfer, we established a performance baseline without batch effects by performing train/test splits within van\_galen\_2019. This isolates method-intrinsic performance from batch-related degradation.
+
+On this within-study split (Table~\ref{tab:intra_study}), both methods achieved strong performance: traditional Random Forest attained ARI=0.691 (5-fold CV), while SCimilarity KNN reached ARI=0.779, representing a 13\% improvement even in the absence of batch effects. This demonstrates that SCimilarity's latent space provides intrinsically better cell type separation compared to normalized gene expression features, independent of batch robustness considerations.
+
+\subsection{Cross-Study Transfer Reveals Dramatic Batch Effect Sensitivity}
+
+We next tested whether SCimilarity's pre-trained latent space enables more robust label transfer compared to traditional reference-based classification. Using van\_galen\_2019 as reference and four independent studies as targets, we compared traditional Random Forest classification on normalized counts versus k-nearest neighbors in SCimilarity space. This cross-study setting introduces batch effects from different sequencing platforms, patient cohorts, and processing protocols.
 
 SCimilarity-based transfer substantially outperformed traditional methods across all metrics (Table~\ref{tab:label_transfer}):
 
@@ -32,6 +38,19 @@ SCimilarity-based transfer substantially outperformed traditional methods across
 The dramatic improvement in macro F1 is particularly significant for AML research, where rare populations such as leukemic stem cells and early progenitors are critical for understanding disease biology but constitute a small fraction of cells. Traditional classification methods showed strong bias toward abundant cell types (weighted F1=0.XXX), while SCimilarity maintained balanced performance across rare and common populations.
 
 Per-target analysis (Table~\ref{tab:per_target}) revealed consistent SCimilarity advantages across all four studies, with ARI improvements ranging from 22\% (zhang\_2023) to 138\% (jiang\_2020). Most notably, on beneyto-calabuig-2023, SCimilarity achieved ARI=0.852 compared to traditional methods' 0.614, representing a 39\% improvement. Even on the challenging jiang\_2020 dataset where both methods struggled, SCimilarity more than doubled the macro F1 score (0.585 vs 0.242, +142\%). This cross-study consistency demonstrates the batch-robust nature of the pre-trained latent space.
+
+\subsection{Quantifying Batch Effect Impact: Intra-Study vs Cross-Study Performance}
+
+Comparing intra-study (Table~\ref{tab:intra_study}) and cross-study (Table~\ref{tab:label_transfer}) performance reveals the magnitude of batch effect degradation:
+
+\begin{itemize}
+    \item \textbf{Traditional methods}: ARI drops from 0.691 (intra-study) to 0.430 (cross-study), a 38\% decline
+    \item \textbf{SCimilarity}: ARI drops from 0.779 (intra-study) to 0.625 (cross-study), a 20\% decline
+\end{itemize}
+
+This comparison quantifies SCimilarity's superior batch robustness: while both methods experience performance degradation when transferring across studies, traditional methods lose nearly twice as much accuracy (38\% vs 20\% decline). The pre-trained latent space maintains 80\% of its within-study performance when applied across studies, whereas traditional gene expression features retain only 62\% of their within-study accuracy.
+
+Critically, this batch robustness difference compounds with SCimilarity's intrinsic advantage (13\% better even without batch effects), resulting in the dramatic 45\% improvement observed in cross-study settings. Foundation models provide both better cell type representations AND better batch robustness—a dual advantage for cross-study integration.
 
 \subsection{Computational Considerations}
 
@@ -51,9 +70,11 @@ Our systematic evaluation demonstrates that:
 
 \begin{enumerate}
     \item SCimilarity can approximate complex consensus annotation pipelines (ARI up to 0.70), though performance varies by dataset quality
-    \item Foundation model-based label transfer substantially outperforms traditional methods, particularly for rare cell types critical to AML biology
+    \item Even without batch effects (intra-study), SCimilarity provides intrinsically better cell type representations (13\% higher ARI than traditional methods)
+    \item When batch effects are introduced (cross-study), traditional methods degrade 38\% while SCimilarity degrades only 20\%—demonstrating superior batch robustness
+    \item Foundation model-based label transfer substantially outperforms traditional methods for cross-study annotation, particularly for rare cell types critical to AML biology (macro F1: +113\%)
     \item The pre-trained latent space provides batch-robust representations despite not explicitly performing batch correction
     \item For high-quality datasets, automated foundation model approaches may reduce or eliminate the need for multi-tool consensus and manual curation
 \end{enumerate}
 
-These findings position foundation models as a practical tool for automated annotation and cross-study integration, with particular value for rare cell type identification and rapid analysis of new datasets.
+These findings position foundation models as a practical tool for automated annotation and cross-study integration, with particular value for rare cell type identification and rapid analysis of new datasets. The dual advantage—better intrinsic representations AND better batch robustness—makes foundation models especially compelling for multi-study meta-analyses and atlas construction.

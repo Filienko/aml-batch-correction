@@ -36,11 +36,17 @@ For each study, we performed Leiden clustering~\cite{leiden2019} on SCimilarity 
 
 Resolution 0.1 was identified as optimal, producing approximately 14--17 clusters per study, closely matching the expert annotation granularity.
 
-\subsection{Experiment 2: Cross-Study Label Transfer}
+\subsection{Experiment 2: Intra-Study Label Transfer (Baseline)}
 
-We evaluated label transfer performance using van\_galen\_2019 as reference (23,344 labeled cells) and the remaining four studies as targets.
+To establish a performance baseline without batch effects, we performed label transfer within a single study. Using van\_galen\_2019 (23,344 cells), we randomly split cells into training (80\%) and test (20\%) sets, ensuring no batch effects between reference and target. This provides an upper bound on achievable accuracy and isolates method-intrinsic performance from batch-related degradation.
 
-\subsubsection{Method 1: Traditional Reference-Based Classification}
+Both traditional Random Forest and SCimilarity KNN were evaluated on this within-study split. We additionally performed 5-fold cross-validation for the traditional method to assess variance. Metrics (ARI, NMI, accuracy) were computed on the held-out test set.
+
+\subsection{Experiment 3: Cross-Study Label Transfer}
+
+We evaluated cross-study label transfer performance using van\_galen\_2019 as reference (23,344 labeled cells) and the remaining four studies as targets. This inter-study setting introduces batch effects from different sequencing platforms, processing protocols, and patient cohorts.
+
+\subsubsection{Traditional Reference-Based Classification}
 Following standard approaches analogous to SingleR~\cite{singleR2019} and Seurat~\cite{seurat2021}:
 \begin{enumerate}
     \item Identified common genes between reference and target (typically >15,000 genes)
@@ -50,7 +56,7 @@ Following standard approaches analogous to SingleR~\cite{singleR2019} and Seurat
     \item Predicted cell type labels for target dataset
 \end{enumerate}
 
-\subsubsection{Method 2: SCimilarity KNN Transfer}
+\subsubsection{SCimilarity KNN Transfer}
 Leveraging the pre-trained latent space:
 \begin{enumerate}
     \item Projected reference cells to SCimilarity space

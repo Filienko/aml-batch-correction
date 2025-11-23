@@ -26,16 +26,18 @@
 3. Create new files for each section and paste content
 4. Create bibliography.bib and paste bibliography content
 
-## Tables That Need Updating
+## Tables Overview
 
-**Table 5 (Per-Target Results)** needs actual values from your results.
+The paper includes 6 tables:
 
-Get them from:
-```bash
-cat results_label_transfer/metrics/label_transfer_results.csv
-```
+1. **Table 1**: Per-dataset annotation replication performance
+2. **Table 2**: Optimized single-study performance
+3. **Table 3**: Resolution sweep analysis
+4. **Table 4**: Intra-study baseline (no batch effects) ← NEW!
+5. **Table 5**: Cross-study label transfer comparison (averaged)
+6. **Table 6**: Per-target cross-study results
 
-Fill in the --- placeholders in paper_tables.tex with actual ARI and Macro F1 values for each target study.
+**Table 4** is the new intra-study baseline showing performance WITHOUT batch effects (van_galen_2019 train/test split). This establishes the upper bound for method performance and quantifies batch effect degradation when comparing to Table 5 (cross-study with batch effects).
 
 ## Citations to Update
 

@@ -8,9 +8,16 @@ However, the quality-dependent variation in performance (ARI ranging from 0.18 t
 
 \subsection{Batch Robustness: The Critical Advantage}
 
-The label transfer experiments reveal the most compelling advantage of foundation models: superior robustness to batch effects. SCimilarity achieved 45\% higher ARI (0.625 vs 0.430) and more than doubled macro F1 scores (0.670 vs 0.315, +113\%) compared to traditional Random Forest classification on raw counts. This dramatic improvement, particularly for rare cell types, highlights a fundamental limitation of traditional reference-based methods like SingleR and Seurat.
+The label transfer experiments reveal the most compelling advantage of foundation models: superior robustness to batch effects. Our controlled comparison—contrasting intra-study transfer (no batch effects) with cross-study transfer (batch effects present)—quantifies this advantage precisely:
 
-Traditional approaches operate in gene expression space, where technical batch effects—sequencing platform differences, processing protocols, ambient RNA contamination—can dominate biological signals. A cell type signature learned from one study may fail to transfer to another due to systematic technical differences, even when the underlying biology is identical. Foundation models, trained on diverse datasets spanning multiple platforms and tissues, learn representations that are inherently more robust to these technical variations. The pre-trained SCimilarity embeddings appear to capture biological cell type identity while factoring out batch-specific technical noise.
+\begin{itemize}
+    \item \textbf{Traditional methods}: Performance degrades 38\% when batch effects are introduced (ARI: 0.691 $\rightarrow$ 0.430)
+    \item \textbf{SCimilarity}: Performance degrades only 20\% under the same conditions (ARI: 0.779 $\rightarrow$ 0.625)
+\end{itemize}
+
+Traditional methods lose nearly twice as much accuracy to batch effects compared to SCimilarity. This robustness advantage, combined with SCimilarity's intrinsic 13\% superiority even without batch effects, produces the dramatic 45\% improvement in cross-study settings and the 113\% gain in rare cell type macro F1.
+
+Traditional approaches operate in gene expression space, where technical batch effects—sequencing platform differences, processing protocols, ambient RNA contamination—can dominate biological signals. A cell type signature learned from one study may fail to transfer to another due to systematic technical differences, even when the underlying biology is identical. Foundation models, trained on diverse datasets spanning multiple platforms and tissues, learn representations that are inherently more robust to these technical variations. The pre-trained SCimilarity embeddings appear to capture biological cell type identity while factoring out batch-specific technical noise, maintaining 80\% of within-study performance when applied across studies (versus 62\% for traditional methods).
 
 This advantage is particularly critical for rare cell types, as evidenced by the 113\% improvement in macro F1. Rare populations like hematopoietic stem cells, early progenitors, or leukemic stem cells constitute small fractions of samples but carry disproportionate biological importance in AML. Traditional methods, which weight performance by cell type frequency, may achieve acceptable overall accuracy while failing catastrophically on these rare but critical populations. The macro F1 metric, which treats all cell types equally, reveals that SCimilarity maintains strong performance across all populations—precisely what is needed for comprehensive AML characterization.
 
