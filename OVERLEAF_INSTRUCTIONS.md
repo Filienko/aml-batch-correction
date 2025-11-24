@@ -28,16 +28,19 @@
 
 ## Tables Overview
 
-The paper includes 6 tables:
+The paper includes 7 tables:
 
 1. **Table 1**: Per-dataset annotation replication performance
 2. **Table 2**: Optimized single-study performance
 3. **Table 3**: Resolution sweep analysis
-4. **Table 4**: Intra-study baseline (no batch effects) ← NEW!
+4. **Table 4**: Intra-study baseline (no batch effects)
 5. **Table 5**: Cross-study label transfer comparison (averaged)
 6. **Table 6**: Per-target cross-study results
+7. **Table 7**: Batch correction benchmarking using scib metrics ← NEW!
 
-**Table 4** is the new intra-study baseline showing performance WITHOUT batch effects (van_galen_2019 train/test split). This establishes the upper bound for method performance and quantifies batch effect degradation when comparing to Table 5 (cross-study with batch effects).
+**Key Tables**:
+- **Table 4**: Intra-study baseline showing performance WITHOUT batch effects. Establishes upper bound and quantifies batch effect degradation.
+- **Table 7**: Direct batch correction benchmarking comparing SCimilarity, scVI, Harmony, and uncorrected data using standardized scib metrics. Shows SCimilarity is competitive with scVI (0.692 vs 0.729) without dataset-specific training.
 
 ## Citations to Update
 

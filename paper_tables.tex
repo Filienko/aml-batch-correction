@@ -123,3 +123,26 @@ Traditional Classifier & 0.430 & 0.506 & 0.315 & --- & 11.4 \\
 \vspace{0.5em}
 \par\noindent\textit{Note:} Improvement shows ARI\% / Macro F1\% increase. SCimilarity achieves superior performance across all four targets, with ARI improvements ranging from 22\% to 138\% and macro F1 improvements from 99\% to 142\%.
 \end{table}
+
+% Table 7: Batch Correction Benchmarking
+\begin{table}[h]
+\centering
+\caption{Batch correction benchmarking using scib metrics (van\_galen\_2019 vs setty\_2019, N=53,898 cells). SCimilarity achieves batch correction performance competitive with scVI (dedicated batch correction method) without explicit batch correction training. Scores range 0--1 (higher = better), except Silhouette batch (lower = better mixing).}
+\label{tab:batch_correction}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Method} & \textbf{Sil. Label} & \textbf{cLISI} & \textbf{Sil. Batch} & \textbf{KBET} & \textbf{Bio Conserv.} & \textbf{Batch Corr.} \\
+\midrule
+Uncorrected & 0.501 & 0.998 & \textit{0.609} & 0.062 & 0.750 & 0.270 \\
+\midrule
+\textbf{scVI} & \textbf{0.536} & \textbf{1.000} & \textbf{0.136} & \textbf{0.664} & \textbf{0.768} & \textbf{0.672} \\
+SCimilarity & 0.580 & 0.998 & 0.300 & 0.540 & 0.789 & 0.548 \\
+Harmony & 0.518 & 0.998 & 0.178 & 0.439 & 0.758 & 0.534 \\
+\midrule
+\multicolumn{7}{l}{\textbf{Overall Performance (Total Score):}} \\
+\multicolumn{2}{l}{scVI: 0.729} & \multicolumn{2}{l}{SCimilarity: 0.692} & \multicolumn{2}{l}{Harmony: 0.669} & Uncorrected: 0.558 \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+\par\noindent\textit{Note:} Sil. = Silhouette score. Bio Conservation = average of Silhouette label, cLISI, PCR comparison. Batch Correction = average of (1 - Silhouette batch), iLISI, KBET, graph connectivity. SCimilarity performs comparably to scVI (0.692 vs 0.729) despite not being explicitly trained for batch correction, demonstrating inherent batch-robust representations. SCimilarity excels at biological conservation (0.789, highest) while maintaining strong batch mixing.
+\end{table}

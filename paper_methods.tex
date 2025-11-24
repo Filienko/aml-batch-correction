@@ -77,14 +77,35 @@ We assessed label transfer quality using:
 
 Macro F1 is particularly important as it reveals performance on rare cell types (e.g., leukemic stem cells, progenitors) that are often critical for AML biology but constitute a small fraction of cells.
 
-\subsection{Batch Effect Analysis}
+\subsection{Experiment 4: Batch Correction Benchmarking}
 
-To assess whether SCimilarity's latent space provides batch correction, we computed batch mixing scores:
+To directly quantify SCimilarity's batch correction capabilities, we performed standardized batch correction benchmarking using scib~\cite{scib2021} (single-cell integration benchmarking) metrics. We compared four methods on a pairwise integration task (van\_galen\_2019 vs setty\_2019, N=53,898 cells):
+
 \begin{itemize}
-    \item For each cell, identified 30 nearest neighbors in latent space
-    \item Counted unique studies represented in each neighborhood
-    \item Averaged across all cells (score: 1.0 = no mixing, 5.0 = perfect mixing)
+    \item \textbf{Uncorrected}: Raw normalized counts (baseline)
+    \item \textbf{scVI}~\cite{scvi2018}: Variational autoencoder explicitly trained for batch correction
+    \item \textbf{SCimilarity}: Pre-trained foundation model embeddings (no explicit batch correction training)
+    \item \textbf{Harmony}~\cite{harmony2019}: PCA-based batch correction
 \end{itemize}
+
+The scib framework evaluates integration quality across two complementary dimensions:
+
+\textbf{Batch correction metrics} (higher = better mixing):
+\begin{itemize}
+    \item Silhouette batch: Separation of batches in latent space (lower = better mixing)
+    \item iLISI: Integration local inverse Simpson's index (batch mixing in local neighborhoods)
+    \item KBET: k-nearest neighbor batch effect test
+    \item Graph connectivity: Preservation of cell-cell connections across batches
+\end{itemize}
+
+\textbf{Biological conservation metrics} (higher = better preservation):
+\begin{itemize}
+    \item Silhouette label: Separation of cell types in latent space
+    \item cLISI: Cell-type local inverse Simpson's index (cell type purity)
+    \item PCR comparison: Principal component regression agreement with uncorrected data
+\end{itemize}
+
+Each method produces aggregate scores for Batch correction, Bio conservation, and Total (balanced combination). This provides an orthogonal evaluation of batch robustness complementary to the downstream label transfer performance measured in Experiment 3.
 
 \subsection{Computational Environment}
 
