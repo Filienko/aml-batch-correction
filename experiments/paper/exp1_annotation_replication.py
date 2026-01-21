@@ -32,10 +32,10 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 VAN_GALEN_STUDIES = [
     'van_galen_2019',
     'zhang_2023',
-    'beneyto-calabuig-2023',
-    'jiang_2020',
-    'velten_2021',
-    'zhai_2022',
+#    'beneyto-calabuig-2023',
+#    'jiang_2020',
+#    'velten_2021',
+#    'zhai_2022',
 ]
 
 
@@ -47,11 +47,10 @@ def main():
     # Load data
     print("\n1. Loading data...")
     adata = sc.read_h5ad(DATA_PATH)
-    print(f"   Loaded: {adata.n_obs:,} cells, {adata.n_vars:,} genes")
-
+    print(f"   Loaded: {adata.n_obs:,} cells, {adata.n_vars:,} genes; columns: {adata.obs}")
     # Subset to Van Galen studies
     print("\n2. Subsetting to Van Galen studies...")
-    available_studies = adata.obs['study'].unique() if 'study' in adata.obs else []
+    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
     valid_studies = [s for s in VAN_GALEN_STUDIES if s in available_studies]
 
     if not valid_studies:
@@ -61,21 +60,22 @@ def main():
 
     print(f"   Using {len(valid_studies)} studies:")
     for study in valid_studies:
-        n_cells = (adata.obs['study'] == study).sum()
+        n_cells = (adata.obs['Study'] == study).sum()
         print(f"     • {study}: {n_cells:,} cells")
 
     adata = subset_data(adata, studies=valid_studies)
+    adata.write_h5ad("scaml_van_galen_subset_50k.h5ad")
     print(f"   Subset: {adata.n_obs:,} cells")
 
     # Run SCimilarity
     print("\n3. Running SCimilarity predictions...")
-    pipeline = Pipeline(model="scimilarity", batch_key="study")
-    predictions = pipeline.predict(adata.copy(), target_column="cell_type")
+    pipeline = Pipeline(model="scimilarity", batch_key="Study")
+    predictions = pipeline.predict(adata.copy(), target_column="Cell Type")
 
     # Compute overall metrics
     print("\n4. Computing metrics...")
     metrics = compute_metrics(
-        y_true=adata.obs['cell_type'].values,
+        y_true=adata.obs['Cell Type'].values,
         y_pred=predictions,
         adata=adata,
         metrics=['accuracy', 'ari', 'nmi', 'f1']
@@ -83,7 +83,7 @@ def main():
 
     # Per-class metrics
     per_class = compute_per_class_metrics(
-        y_true=adata.obs['cell_type'].values,
+        y_true=adata.obs['Cell Type'].values,
         y_pred=predictions
     )
     per_class_df = pd.DataFrame(per_class).T.sort_values('support')
@@ -123,7 +123,7 @@ def main():
     import matplotlib.pyplot as plt
 
     fig = plot_confusion_matrix(
-        y_true=adata.obs['cell_type'].values,
+        y_true=adata.obs['Cell Type'].values,
         y_pred=predictions,
         normalize=True,
         figsize=(14, 12),

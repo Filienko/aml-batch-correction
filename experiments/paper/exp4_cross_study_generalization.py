@@ -20,7 +20,8 @@ from sccl.data import subset_data
 from sccl.evaluation import compute_metrics
 
 # Configuration
-DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
+DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
+# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 

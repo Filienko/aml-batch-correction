@@ -16,5 +16,5 @@ seaborn>=0.11.0
 pyyaml>=5.4.0
 
 # Optional dependencies (install separately if needed)
-# scimilarity  # For foundation model
-# scvi-tools>=1.0.0  # For scVI batch correction
+scimilarity  # For foundation model
+scvi-tools>=1.0.0  # For scVI batch correction

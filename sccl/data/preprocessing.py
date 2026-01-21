@@ -168,7 +168,7 @@ def subset_data(
     if studies is not None:
         # Try common study column names
         study_col = None
-        for col in ['study', 'dataset', 'batch']:
+        for col in ['Study', 'dataset', 'batch']:
             if col in adata.obs.columns:
                 study_col = col
                 break
@@ -179,7 +179,7 @@ def subset_data(
     if cell_types is not None:
         # Try common cell type column names
         celltype_col = None
-        for col in ['cell_type', 'celltype', 'cell_label', 'annotation']:
+        for col in ['cell_type', 'Cell Type', 'cell_label', 'annotation']:
             if col in adata.obs.columns:
                 celltype_col = col
                 break
