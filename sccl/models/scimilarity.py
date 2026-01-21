@@ -54,6 +54,7 @@ class SCimilarityModel(BaseModel):
         self.resolution = resolution
         self.species = species
         self._scimilarity = None
+        self._ca_model = None
         self._embedding = None
 
     def _get_scimilarity(self):
@@ -98,15 +99,34 @@ class SCimilarityModel(BaseModel):
 
         logger.info("Computing SCimilarity embeddings...")
 
+        # Get the model's target gene order based on species
+        try:
+            # Try the standard way to get gene order
+            if hasattr(scim, 'get_gene_order'):
+                target_gene_order = scim.get_gene_order(species=self.species)
+            else:
+                # Fallback: load CellAnnotation model to get gene order
+                ca = scim.CellAnnotation(model_path=self.model_path)
+                target_gene_order = ca.gene_order
+        except Exception as e:
+            logger.warning(f"Could not get gene order for species '{self.species}': {e}")
+            logger.info("Using default human gene order")
+            # Fallback to default model
+            ca = scim.CellAnnotation()
+            target_gene_order = ca.gene_order
+
         # Align genes to model vocabulary
-        adata_aligned = scim.utils.align_dataset(adata_raw, species=self.species)
+        adata_aligned = scim.utils.align_dataset(adata_raw, target_gene_order)
 
         # Normalize
         sc.pp.normalize_total(adata_aligned, target_sum=1e4)
         sc.pp.log1p(adata_aligned)
 
-        # Get embeddings
-        embeddings = scim.get_embeddings(adata_aligned)
+        # Get embeddings using CellAnnotation model
+        if not hasattr(self, '_ca_model') or self._ca_model is None:
+            self._ca_model = scim.CellAnnotation(model_path=self.model_path)
+
+        embeddings = self._ca_model.get_embeddings(adata_aligned)
 
         self._embedding = embeddings
         return embeddings
