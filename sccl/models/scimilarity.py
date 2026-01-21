@@ -99,21 +99,21 @@ class SCimilarityModel(BaseModel):
 
         logger.info("Computing SCimilarity embeddings...")
 
-        # Get the model's target gene order based on species
-        try:
-            # Try the standard way to get gene order
-            if hasattr(scim, 'get_gene_order'):
-                target_gene_order = scim.get_gene_order(species=self.species)
-            else:
-                # Fallback: load CellAnnotation model to get gene order
-                ca = scim.CellAnnotation(model_path=self.model_path)
-                target_gene_order = ca.gene_order
-        except Exception as e:
-            logger.warning(f"Could not get gene order for species '{self.species}': {e}")
-            logger.info("Using default human gene order")
-            # Fallback to default model
-            ca = scim.CellAnnotation()
-            target_gene_order = ca.gene_order
+        # Load CellAnnotation model if not already loaded
+        if not hasattr(self, '_ca_model') or self._ca_model is None:
+            logger.info(f"Loading SCimilarity CellAnnotation model (species: {self.species})...")
+            # Load model with specified path or default
+            model_path = self.model_path if self.model_path else "default"
+            try:
+                self._ca_model = scim.CellAnnotation(model_path=model_path)
+            except Exception as e:
+                logger.warning(f"Error loading model with path '{model_path}': {e}")
+                logger.info("Trying with default model path...")
+                self._ca_model = scim.CellAnnotation(model_path="default")
+
+        # Get gene order from the model
+        target_gene_order = self._ca_model.gene_order
+        logger.info(f"Using gene order with {len(target_gene_order)} genes")
 
         # Align genes to model vocabulary
         adata_aligned = scim.utils.align_dataset(adata_raw, target_gene_order)
@@ -123,9 +123,6 @@ class SCimilarityModel(BaseModel):
         sc.pp.log1p(adata_aligned)
 
         # Get embeddings using CellAnnotation model
-        if not hasattr(self, '_ca_model') or self._ca_model is None:
-            self._ca_model = scim.CellAnnotation(model_path=self.model_path)
-
         embeddings = self._ca_model.get_embeddings(adata_aligned)
 
         self._embedding = embeddings
