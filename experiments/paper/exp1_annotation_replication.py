@@ -5,10 +5,16 @@ Experiment 1: Annotation Replication
 Can SCimilarity approximate expert consensus annotations?
 
 Expected: ARI > 0.70 indicates good replication
+
+Usage:
+    python exp1_annotation_replication.py
+    python exp1_annotation_replication.py --data /path/to/data.h5ad
+    python exp1_annotation_replication.py --study-col batch --cell-type-col annotation
 """
 
 import sys
 import warnings
+import argparse
 warnings.filterwarnings('ignore')
 
 import numpy as np
@@ -20,11 +26,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl import Pipeline
-from sccl.data import subset_data
+from sccl.data import subset_data, list_columns
 from sccl.evaluation import compute_metrics, compute_per_class_metrics, plot_confusion_matrix
 
-# Configuration
-DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
+# Default configuration
+DEFAULT_DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -39,18 +45,73 @@ VAN_GALEN_STUDIES = [
 ]
 
 
-def main():
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Experiment 1: Annotation Replication',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Use defaults (auto-detect column names)
+  python exp1_annotation_replication.py
+
+  # Custom data path
+  python exp1_annotation_replication.py --data /path/to/data.h5ad
+
+  # Custom column names
+  python exp1_annotation_replication.py --study-col batch_id --cell-type-col annotation
+
+  # List available columns first
+  python exp1_annotation_replication.py --list-columns
+        """
+    )
+
+    parser.add_argument('--data', type=str, default=DEFAULT_DATA_PATH,
+                       help='Path to h5ad data file')
+    parser.add_argument('--study-col', type=str, default=None,
+                       help='Study/batch column name (auto-detected if not specified)')
+    parser.add_argument('--cell-type-col', type=str, default=None,
+                       help='Cell type column name (auto-detected if not specified)')
+    parser.add_argument('--list-columns', action='store_true',
+                       help='List available columns and exit')
+    parser.add_argument('--species', type=str, default='human',
+                       choices=['human', 'mouse'],
+                       help='Species for SCimilarity gene alignment')
+
+    return parser.parse_args()
+
+
+def main(args=None):
+    if args is None:
+        args = parse_args()
+
     print("="*80)
     print("EXPERIMENT 1: Annotation Replication")
     print("="*80)
 
     # Load data
     print("\n1. Loading data...")
-    adata = sc.read_h5ad(DATA_PATH)
-    print(f"   Loaded: {adata.n_obs:,} cells, {adata.n_vars:,} genes; columns: {adata.obs}")
+    adata = sc.read_h5ad(args.data)
+    print(f"   Loaded: {adata.n_obs:,} cells, {adata.n_vars:,} genes")
+
+    # List columns if requested
+    if args.list_columns:
+        columns = list_columns(adata, verbose=True)
+        return
+
+    # Detect or use specified columns
+    from sccl.data import get_study_column, get_cell_type_column
+
+    study_col = get_study_column(adata, args.study_col)
+    cell_type_col = get_cell_type_column(adata, args.cell_type_col)
+
+    print(f"\n   Using columns:")
+    print(f"     Study: {study_col}")
+    print(f"     Cell Type: {cell_type_col}")
+
     # Subset to Van Galen studies
     print("\n2. Subsetting to Van Galen studies...")
-    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
+    available_studies = adata.obs[study_col].unique()
     valid_studies = [s for s in VAN_GALEN_STUDIES if s in available_studies]
 
     if not valid_studies:
@@ -60,22 +121,25 @@ def main():
 
     print(f"   Using {len(valid_studies)} studies:")
     for study in valid_studies:
-        n_cells = (adata.obs['Study'] == study).sum()
+        n_cells = (adata.obs[study_col] == study).sum()
         print(f"     • {study}: {n_cells:,} cells")
 
-    adata = subset_data(adata, studies=valid_studies)
-    adata.write_h5ad("scaml_van_galen_subset_50k.h5ad")
+    adata = subset_data(adata, studies=valid_studies, study_col=study_col)
     print(f"   Subset: {adata.n_obs:,} cells")
 
     # Run SCimilarity
     print("\n3. Running SCimilarity predictions...")
-    pipeline = Pipeline(model="scimilarity", batch_key="Study")
-    predictions = pipeline.predict(adata.copy(), target_column="Cell Type")
+    pipeline = Pipeline(
+        model="scimilarity",
+        batch_key=study_col,
+        model_params={'species': args.species}
+    )
+    predictions = pipeline.predict(adata.copy(), target_column=cell_type_col)
 
     # Compute overall metrics
     print("\n4. Computing metrics...")
     metrics = compute_metrics(
-        y_true=adata.obs['Cell Type'].values,
+        y_true=adata.obs[cell_type_col].values,
         y_pred=predictions,
         adata=adata,
         metrics=['accuracy', 'ari', 'nmi', 'f1']
@@ -83,7 +147,7 @@ def main():
 
     # Per-class metrics
     per_class = compute_per_class_metrics(
-        y_true=adata.obs['Cell Type'].values,
+        y_true=adata.obs[cell_type_col].values,
         y_pred=predictions
     )
     per_class_df = pd.DataFrame(per_class).T.sort_values('support')
@@ -123,7 +187,7 @@ def main():
     import matplotlib.pyplot as plt
 
     fig = plot_confusion_matrix(
-        y_true=adata.obs['Cell Type'].values,
+        y_true=adata.obs[cell_type_col].values,
         y_pred=predictions,
         normalize=True,
         figsize=(14, 12),

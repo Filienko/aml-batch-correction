@@ -115,6 +115,8 @@ def subset_data(
     studies: Optional[List[str]] = None,
     cell_types: Optional[List[str]] = None,
     n_cells: Optional[int] = None,
+    study_col: Optional[str] = None,
+    cell_type_col: Optional[str] = None,
     copy: bool = True,
 ) -> AnnData:
     """Subset single cell data based on various criteria.
@@ -134,6 +136,12 @@ def subset_data(
         List of cell types to keep (shortcut for obs_filter)
     n_cells : int, optional
         Randomly downsample to this many cells
+    study_col : str, optional
+        Name of the study/batch column. If not provided, will try to auto-detect
+        from common names: 'study', 'Study', 'dataset', 'batch'
+    cell_type_col : str, optional
+        Name of the cell type column. If not provided, will try to auto-detect
+        from common names: 'cell_type', 'Cell Type', 'celltype', 'cell_label', 'annotation'
     copy : bool, default=True
         Whether to return a copy
 
@@ -144,8 +152,11 @@ def subset_data(
 
     Examples
     --------
-    >>> # Keep specific studies
+    >>> # Keep specific studies (auto-detect column)
     >>> adata_sub = subset_data(adata, studies=['study1', 'study2'])
+    >>>
+    >>> # Keep specific studies (custom column name)
+    >>> adata_sub = subset_data(adata, studies=['study1', 'study2'], study_col='batch_id')
     >>>
     >>> # Keep specific cell types
     >>> adata_sub = subset_data(adata, cell_types=['T cell', 'B cell'])
@@ -166,26 +177,42 @@ def subset_data(
         obs_filter = {}
 
     if studies is not None:
-        # Try common study column names
-        study_col = None
-        for col in ['Study', 'dataset', 'batch']:
-            if col in adata.obs.columns:
-                study_col = col
-                break
-        if study_col is None:
-            raise ValueError(f"No study column found in obs. Columns: {adata.obs.columns.tolist()}")
-        obs_filter[study_col] = studies
+        # Use provided column name or try to auto-detect
+        if study_col is not None:
+            if study_col not in adata.obs.columns:
+                raise ValueError(f"Specified study column '{study_col}' not found in obs. Columns: {adata.obs.columns.tolist()}")
+            detected_col = study_col
+        else:
+            # Try common study column names
+            detected_col = None
+            for col in ['study', 'Study', 'dataset', 'batch']:
+                if col in adata.obs.columns:
+                    detected_col = col
+                    break
+            if detected_col is None:
+                raise ValueError(f"No study column found in obs. Columns: {adata.obs.columns.tolist()}. Specify study_col parameter.")
+
+        obs_filter[detected_col] = studies
+        logger.info(f"Using study column: '{detected_col}'")
 
     if cell_types is not None:
-        # Try common cell type column names
-        celltype_col = None
-        for col in ['cell_type', 'Cell Type', 'cell_label', 'annotation']:
-            if col in adata.obs.columns:
-                celltype_col = col
-                break
-        if celltype_col is None:
-            raise ValueError(f"No cell type column found in obs. Columns: {adata.obs.columns.tolist()}")
-        obs_filter[celltype_col] = cell_types
+        # Use provided column name or try to auto-detect
+        if cell_type_col is not None:
+            if cell_type_col not in adata.obs.columns:
+                raise ValueError(f"Specified cell type column '{cell_type_col}' not found in obs. Columns: {adata.obs.columns.tolist()}")
+            detected_col = cell_type_col
+        else:
+            # Try common cell type column names
+            detected_col = None
+            for col in ['cell_type', 'Cell Type', 'celltype', 'cell_label', 'annotation']:
+                if col in adata.obs.columns:
+                    detected_col = col
+                    break
+            if detected_col is None:
+                raise ValueError(f"No cell type column found in obs. Columns: {adata.obs.columns.tolist()}. Specify cell_type_col parameter.")
+
+        obs_filter[detected_col] = cell_types
+        logger.info(f"Using cell type column: '{detected_col}'")
 
     # Apply obs filter
     if obs_filter:

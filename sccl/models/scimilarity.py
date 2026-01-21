@@ -26,10 +26,16 @@ class SCimilarityModel(BaseModel):
         Number of neighbors for clustering
     resolution : float, default=1.0
         Resolution parameter for Leiden clustering
+    species : str, default='human'
+        Species for gene alignment ('human' or 'mouse')
 
     Examples
     --------
     >>> model = SCimilarityModel()
+    >>> predictions = model.predict(adata)
+    >>>
+    >>> # For mouse data
+    >>> model = SCimilarityModel(species='mouse')
     >>> predictions = model.predict(adata)
     """
 
@@ -38,6 +44,7 @@ class SCimilarityModel(BaseModel):
         model_path: Optional[str] = None,
         n_neighbors: int = 15,
         resolution: float = 1.0,
+        species: str = 'human',
         **kwargs
     ):
         """Initialize SCimilarity model."""
@@ -45,6 +52,7 @@ class SCimilarityModel(BaseModel):
         self.model_path = model_path
         self.n_neighbors = n_neighbors
         self.resolution = resolution
+        self.species = species
         self._scimilarity = None
         self._embedding = None
 
@@ -91,7 +99,7 @@ class SCimilarityModel(BaseModel):
         logger.info("Computing SCimilarity embeddings...")
 
         # Align genes to model vocabulary
-        adata_aligned = scim.utils.align_dataset(adata_raw)
+        adata_aligned = scim.utils.align_dataset(adata_raw, species=self.species)
 
         # Normalize
         sc.pp.normalize_total(adata_aligned, target_sum=1e4)
