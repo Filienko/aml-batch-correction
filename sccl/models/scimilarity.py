@@ -135,13 +135,16 @@ class SCimilarityModel(BaseModel):
         # Align genes to model vocabulary
         adata_aligned = scim.utils.align_dataset(adata_raw, target_gene_order)
 
-        # Normalize
-        sc.pp.normalize_total(adata_aligned, target_sum=1e4)
-        sc.pp.log1p(adata_aligned)
+        # Store counts in layers if not present (required by lognorm_counts)
+        if 'counts' not in adata_aligned.layers:
+            adata_aligned.layers['counts'] = adata_aligned.X.copy()
+
+        # Normalize using SCimilarity's lognorm_counts (critical for proper embeddings!)
+        adata_normalized = scim.utils.lognorm_counts(adata_aligned)
 
         # Get embeddings using CellAnnotation model
         # get_embeddings expects the expression matrix (X), not the full AnnData
-        embeddings = self._ca_model.get_embeddings(adata_aligned.X)
+        embeddings = self._ca_model.get_embeddings(adata_normalized.X)
 
         self._embedding = embeddings
         return embeddings
