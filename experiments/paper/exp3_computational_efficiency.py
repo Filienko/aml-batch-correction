@@ -26,7 +26,7 @@ MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-N_CELLS_FOR_TIMING = 10000  # Subsample for timing
+N_CELLS_FOR_TIMING = 1000  # Subsample for timing
 
 
 def main():
@@ -81,14 +81,13 @@ def main():
     timing_df = pd.DataFrame(timing_results)
     timing_df['time_minutes'] = timing_df['time_seconds'] / 60
     timing_df['time_hours'] = timing_df['time_seconds'] / 3600
-    timing_df['speedup_vs_traditional'] = traditional_time / timing_df['time_seconds']
-
+    
     # Display results
     print("\n" + "="*80)
     print("RESULTS")
     print("="*80)
     print("\nTiming Results:")
-    print(timing_df[['method', 'time_minutes', 'speedup_vs_traditional']].to_string(index=False))
+    print(timing_df[['method', 'time_minutes']].to_string(index=False))
 
     # Save results
     print(f"\n6. Saving results to {OUTPUT_DIR}/")
@@ -101,11 +100,6 @@ def main():
     print("="*80)
 
     print(f"\nSCimilarity:          {scim_time/60:.1f} minutes")
-    print(f"Traditional pipeline: {traditional_time/60:.0f} minutes (automated tools only)")
-    print(f"Manual curation:      {manual_time/60:.0f} minutes (estimated)")
-    print(f"\nTotal traditional:    {(traditional_time + manual_time)/60:.0f} minutes")
-    print(f"Speedup (vs automated): {traditional_time/scim_time:.1f}x faster")
-    print(f"Speedup (vs total):     {(traditional_time + manual_time)/scim_time:.1f}x faster")
     print("="*80)
 
 
