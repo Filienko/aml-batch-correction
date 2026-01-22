@@ -40,12 +40,12 @@ MODELS_TO_TEST = {
     # SCimilarity with different classifiers on embeddings
     'SCimilarity+KNN': ('scimilarity', {'classifier': 'knn'}),
     'SCimilarity+RF': ('scimilarity', {'classifier': 'random_forest'}),
-    'SCimilarity+SVM': ('scimilarity', {'classifier': 'svm'}),
+#    'SCimilarity+SVM': ('scimilarity', {'classifier': 'svm'}),
 
     # Traditional ML on raw gene expression
     'Random Forest': ('random_forest', {}),
     'KNN': ('knn', {}),
-    'SVM': ('svm', {}),
+#    'SVM': ('svm', {}),
 }
 
 
