@@ -20,8 +20,8 @@ from sccl.data import subset_data
 from sccl.evaluation import compute_metrics
 
 # Configuration
-DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
-# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
+DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
 MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -29,9 +29,9 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 VAN_GALEN_STUDIES = [
     'van_galen_2019',
     'zhang_2023',
-    'beneyto-calabuig-2023',
-    'jiang_2020',
-    'velten_2021',
+#    'beneyto-calabuig-2023',
+#    'jiang_2020',
+#    'velten_2021',
     'zhai_2022',
 ]
 
@@ -46,7 +46,7 @@ def main():
     adata = sc.read_h5ad(DATA_PATH)
 
     # Get valid studies
-    available_studies = adata.obs['study'].unique() if 'study' in adata.obs else []
+    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
     valid_studies = [s for s in VAN_GALEN_STUDIES if s in available_studies]
 
     if len(valid_studies) < 3:
@@ -76,7 +76,7 @@ def main():
 
         # Evaluate
         metrics = compute_metrics(
-            y_true=adata_test.obs['cell_type'].values,
+            y_true=adata_test.obs['Cell Type'].values,
             y_pred=predictions,
             metrics=['accuracy', 'ari', 'nmi']
         )

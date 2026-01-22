@@ -23,19 +23,23 @@ from sccl.data import subset_data, preprocess_data
 from sccl.evaluation import compute_metrics
 
 # Configuration
-DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
-# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
+DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
 MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 REFERENCE_STUDY = 'van_galen_2019'
-QUERY_STUDIES = ['zhang_2023', 'beneyto-calabuig-2023', 'jiang_2020', 'velten_2021']
+QUERY_STUDIES = ['zhang_2023',
+# 'beneyto-calabuig-2023',
+# 'jiang_2020',
+'velten_2021'
+]
 
 MODELS_TO_TEST = {
     'SCimilarity': 'scimilarity',
     'Random Forest': 'random_forest',
-    'SVM': 'svm',
+#    'SVM': 'svm',
     'KNN': 'knn',
 }
 
@@ -50,7 +54,7 @@ def main():
     adata = sc.read_h5ad(DATA_PATH)
 
     # Check reference exists
-    available_studies = adata.obs['study'].unique() if 'study' in adata.obs else []
+    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
 
     if REFERENCE_STUDY not in available_studies:
         print(f"   ERROR: Reference study '{REFERENCE_STUDY}' not found!")
@@ -98,7 +102,7 @@ def main():
                 # Train on reference (if needed)
                 if hasattr(pipeline.model, 'fit'):
                     adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-                    pipeline.model.fit(adata_ref_prep, target_column='cell_type')
+                    pipeline.model.fit(adata_ref_prep, target_column='Cell Type')
 
                 # Predict on query
                 adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
@@ -106,9 +110,9 @@ def main():
 
                 # Evaluate
                 metrics = compute_metrics(
-                    y_true=adata_query.obs['cell_type'].values,
+                    y_true=adata_query.obs['Cell Type'].values,
                     y_pred=pred,
-                    metrics=['accuracy', 'ari', 'nmi', 'f1_macro']
+                    metrics=['accuracy', 'ari', 'nmi']
                 )
 
                 results.append({
@@ -117,7 +121,6 @@ def main():
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'nmi': metrics['nmi'],
-                    'f1': metrics['f1_macro'],
                     'n_cells': adata_query.n_obs
                 })
 
@@ -131,7 +134,6 @@ def main():
                     'accuracy': 0,
                     'ari': 0,
                     'nmi': 0,
-                    'f1': 0,
                     'n_cells': adata_query.n_obs
                 })
 
@@ -147,7 +149,7 @@ def main():
     print("\n" + "="*80)
     print("Average Performance by Model:")
     print("="*80)
-    avg_by_model = results_df.groupby('model')[['accuracy', 'ari', 'nmi', 'f1']].mean()
+    avg_by_model = results_df.groupby('model')[['accuracy', 'ari', 'nmi']].mean()
     avg_by_model = avg_by_model.sort_values('ari', ascending=False)
     print(avg_by_model.to_string())
 
@@ -171,14 +173,6 @@ def main():
     print(f"   Average ARI: {best_ari:.4f}")
 
     scim_ari = avg_by_model.loc['SCimilarity', 'ari'] if 'SCimilarity' in avg_by_model.index else 0
-
-    if best_model == 'SCimilarity':
-        print("\n✅ SCimilarity outperforms traditional ML for label transfer")
-    elif scim_ari >= best_ari - 0.05:
-        print("\n✅ SCimilarity competitive with best traditional ML methods")
-    else:
-        print("\n⚠️ Traditional ML outperforms SCimilarity")
-
     print("="*80)
 
 

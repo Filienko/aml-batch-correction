@@ -127,7 +127,7 @@ def main(args=None):
         n_cells = (adata.obs[study_col] == study).sum()
         print(f"     • {study}: {n_cells:,} cells")
 
-    if True:
+    if False:
         mask = adata.obs[study_col].isin(valid_studies)
         # Subset and make a copy to preserve obs/var
         adata_subset = adata[mask].copy()

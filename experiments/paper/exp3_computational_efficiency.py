@@ -20,13 +20,13 @@ from sccl import Pipeline
 from sccl.data import subset_data
 
 # Configuration
-DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
-# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
+DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
 MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-N_CELLS_FOR_TIMING = 5000  # Subsample for timing
+N_CELLS_FOR_TIMING = 10000  # Subsample for timing
 
 
 def main():
@@ -59,7 +59,7 @@ def main():
     print("\n4. Testing Random Forest...")
     start = time.time()
     pipeline_rf = Pipeline(model="random_forest")
-    pred_rf = pipeline_rf.predict(adata_timing.copy(), target_column='cell_type')
+    pred_rf = pipeline_rf.predict(adata_timing.copy(), target_column='Cell Type')
     rf_time = time.time() - start
     timing_results.append({'method': 'Random Forest', 'time_seconds': rf_time})
     print(f"   ✓ Completed in {rf_time:.1f} seconds ({rf_time/60:.2f} minutes)")
@@ -68,33 +68,10 @@ def main():
     print("\n5. Testing SVM...")
     start = time.time()
     pipeline_svm = Pipeline(model="svm")
-    pred_svm = pipeline_svm.predict(adata_timing.copy(), target_column='cell_type')
+    pred_svm = pipeline_svm.predict(adata_timing.copy(), target_column='Cell Type')
     svm_time = time.time() - start
     timing_results.append({'method': 'SVM', 'time_seconds': svm_time})
     print(f"   ✓ Completed in {svm_time:.1f} seconds ({svm_time/60:.2f} minutes)")
-
-    # Estimate traditional pipeline time
-    # Based on tool documentation:
-    # - CellTypist: ~5-10 min
-    # - SingleR: ~10-20 min
-    # - scType: ~5 min
-    # - Consensus + manual curation: hours
-    celltyist_time = 7 * 60  # 7 minutes (average)
-    singler_time = 15 * 60   # 15 minutes (average)
-    sctype_time = 5 * 60     # 5 minutes
-    traditional_time = celltyist_time + singler_time + sctype_time
-
-    timing_results.append({
-        'method': 'Traditional Pipeline (CellTypist+SingleR+scType)',
-        'time_seconds': traditional_time
-    })
-
-    # Manual curation (estimated)
-    manual_time = 2 * 3600  # 2 hours (conservative estimate)
-    timing_results.append({
-        'method': 'Manual Curation (estimated)',
-        'time_seconds': manual_time
-    })
 
     # Create results DataFrame
     timing_df = pd.DataFrame(timing_results)
@@ -125,14 +102,6 @@ def main():
     print(f"\nTotal traditional:    {(traditional_time + manual_time)/60:.0f} minutes")
     print(f"Speedup (vs automated): {traditional_time/scim_time:.1f}x faster")
     print(f"Speedup (vs total):     {(traditional_time + manual_time)/scim_time:.1f}x faster")
-
-    if scim_time < traditional_time / 5:
-        print("\n✅ SCimilarity is SIGNIFICANTLY more efficient (>5x speedup)")
-    elif scim_time < traditional_time / 2:
-        print("\n✅ SCimilarity is more efficient (>2x speedup)")
-    else:
-        print("\n⚠️ Moderate efficiency improvement")
-
     print("="*80)
 
 
