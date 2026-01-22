@@ -1,0 +1,63 @@
+# Example SCCL configuration file
+#
+# Usage: sccl run --config example_config.yaml
+
+# Data configuration
+data:
+  # Path to your h5ad file
+  path: "data/synthetic_example.h5ad"
+
+  # Column to predict
+  target_column: "cell_type"
+
+  # Batch/study column (optional, for batch-aware models)
+  batch_column: "batch"
+
+  # Optional: subset data
+  subset:
+    # Uncomment to subset to specific studies
+    # studies: ["study1", "study2"]
+
+    # Uncomment to subset to specific cell types
+    # cell_types: ["T cell", "B cell", "Monocyte"]
+
+    # Uncomment to downsample
+    # n_cells: 5000
+
+# Models to run
+models:
+  # Simple model name
+  - random_forest
+
+  # Model with parameters
+  - random_forest:
+      n_estimators: 200
+      max_depth: 10
+
+  - logistic_regression:
+      C: 0.1
+
+  - knn:
+      n_neighbors: 10
+
+  # Foundation models (if installed)
+  # - scimilarity
+  # - scvi
+
+# Evaluation configuration
+evaluation:
+  # Metrics to compute (default: all)
+  metrics:
+    - accuracy
+    - ari
+    - nmi
+    - f1
+
+  # Test set fraction
+  test_size: 0.2
+
+# Output configuration (optional)
+# output:
+#   predictions: "predictions.csv"
+#   metrics: "metrics.json"
+#   figures: "figures/"

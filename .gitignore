@@ -5,3 +5,6 @@ models/
 data/
 
 *.csv
+*.h5ad
+model_v1.1/
+*.gz

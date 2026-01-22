@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""
+Experiment 3: Computational Efficiency
+=======================================
+How fast is SCimilarity compared to traditional pipeline?
+"""
+
+import sys
+import warnings
+import time
+warnings.filterwarnings('ignore')
+
+import pandas as pd
+import scanpy as sc
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from sccl import Pipeline
+from sccl.data import subset_data, get_cell_type_column
+
+# Configuration
+# DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
+DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
+MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
+OUTPUT_DIR = Path(__file__).parent / "results"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+N_CELLS_FOR_TIMING = 1000  # Subsample for timing
+
+
+def main():
+    print("="*80)
+    print("EXPERIMENT 3: Computational Efficiency")
+    print("="*80)
+
+    # Load and subsample data
+    print("\n1. Loading data...")
+    adata = sc.read_h5ad(DATA_PATH)
+
+    # Detect columns
+    cell_type_col = get_cell_type_column(adata)
+    print(f"   Using cell type column: '{cell_type_col}'")
+
+    print(f"\n2. Subsampling to {N_CELLS_FOR_TIMING:,} cells for timing...")
+    adata_timing = subset_data(adata.copy(), n_cells=min(N_CELLS_FOR_TIMING, adata.n_obs))
+    print(f"   Using: {adata_timing.n_obs:,} cells")
+
+    # Timing results
+    timing_results = []
+
+    # Time SCimilarity
+    print("\n3. Testing SCimilarity...")
+    print(f"   Using model: {MODEL_PATH}")
+    start = time.time()
+    pipeline_scim = Pipeline(model="scimilarity", model_params={'model_path': MODEL_PATH})
+    pred_scim = pipeline_scim.predict(adata_timing.copy())
+    scim_time = time.time() - start
+    timing_results.append({'method': 'SCimilarity', 'time_seconds': scim_time})
+    print(f"   ✓ Completed in {scim_time:.1f} seconds ({scim_time/60:.2f} minutes)")
+
+    # Time Random Forest
+    print("\n4. Testing Random Forest...")
+    start = time.time()
+    pipeline_rf = Pipeline(model="random_forest")
+    pred_rf = pipeline_rf.predict(adata_timing.copy(), target_column=cell_type_col)
+    rf_time = time.time() - start
+    timing_results.append({'method': 'Random Forest', 'time_seconds': rf_time})
+    print(f"   ✓ Completed in {rf_time:.1f} seconds ({rf_time/60:.2f} minutes)")
+
+    # Time SVM
+    print("\n5. Testing SVM...")
+    start = time.time()
+    pipeline_svm = Pipeline(model="svm")
+    pred_svm = pipeline_svm.predict(adata_timing.copy(), target_column=cell_type_col)
+    svm_time = time.time() - start
+    timing_results.append({'method': 'SVM', 'time_seconds': svm_time})
+    print(f"   ✓ Completed in {svm_time:.1f} seconds ({svm_time/60:.2f} minutes)")
+
+    # Create results DataFrame
+    timing_df = pd.DataFrame(timing_results)
+    timing_df['time_minutes'] = timing_df['time_seconds'] / 60
+    timing_df['time_hours'] = timing_df['time_seconds'] / 3600
+    
+    # Display results
+    print("\n" + "="*80)
+    print("RESULTS")
+    print("="*80)
+    print("\nTiming Results:")
+    print(timing_df[['method', 'time_minutes']].to_string(index=False))
+
+    # Save results
+    print(f"\n6. Saving results to {OUTPUT_DIR}/")
+    timing_df.to_csv(OUTPUT_DIR / "exp3_timing.csv", index=False)
+    print("   ✓ exp3_timing.csv")
+
+    # Conclusion
+    print("\n" + "="*80)
+    print("CONCLUSION")
+    print("="*80)
+
+    print(f"\nSCimilarity:          {scim_time/60:.1f} minutes")
+    print("="*80)
+
+
+if __name__ == "__main__":
+    main()
