@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl import Pipeline
-from sccl.data import subset_data, preprocess_data
+from sccl.data import subset_data, preprocess_data, get_study_column, get_cell_type_column
 from sccl.evaluation import compute_metrics
 
 # Configuration
@@ -53,8 +53,14 @@ def main():
     print("\n1. Loading data...")
     adata = sc.read_h5ad(DATA_PATH)
 
+    # Detect columns
+    study_col = get_study_column(adata)
+    cell_type_col = get_cell_type_column(adata)
+    print(f"   Using study column: '{study_col}'")
+    print(f"   Using cell type column: '{cell_type_col}'")
+
     # Check reference exists
-    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
+    available_studies = adata.obs[study_col].unique()
 
     if REFERENCE_STUDY not in available_studies:
         print(f"   ERROR: Reference study '{REFERENCE_STUDY}' not found!")
@@ -102,7 +108,7 @@ def main():
                 # Train on reference (if needed)
                 if hasattr(pipeline.model, 'fit'):
                     adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-                    pipeline.model.fit(adata_ref_prep, target_column='Cell Type')
+                    pipeline.model.fit(adata_ref_prep, target_column=cell_type_col)
 
                 # Predict on query
                 adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
@@ -110,7 +116,7 @@ def main():
 
                 # Evaluate
                 metrics = compute_metrics(
-                    y_true=adata_query.obs['Cell Type'].values,
+                    y_true=adata_query.obs[cell_type_col].values,
                     y_pred=pred,
                     metrics=['accuracy', 'ari', 'nmi']
                 )

@@ -57,6 +57,11 @@ class SCimilarityModel(BaseModel):
         self._ca_model = None
         self._embedding = None
 
+        # For label transfer
+        self._reference_embeddings = None
+        self._reference_labels = None
+        self._knn_classifier = None
+
     def _get_scimilarity(self):
         """Lazy load SCimilarity model."""
         if self._scimilarity is None:
@@ -129,43 +134,96 @@ class SCimilarityModel(BaseModel):
         self._embedding = embeddings
         return embeddings
 
+    def fit(
+        self,
+        adata: AnnData,
+        target_column: str,
+        batch_key: Optional[str] = None,
+    ) -> None:
+        """Train SCimilarity for label transfer.
+
+        Computes embeddings for reference data and trains a KNN classifier
+        for label transfer to new data.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Reference data with labels
+        target_column : str
+            Column in adata.obs containing cell type labels
+        batch_key : str, optional
+            Not used for SCimilarity
+        """
+        from sklearn.neighbors import KNeighborsClassifier
+        import pandas as pd
+
+        logger.info("Training SCimilarity for label transfer...")
+
+        if target_column not in adata.obs.columns:
+            raise ValueError(f"Column '{target_column}' not found in adata.obs")
+
+        # Get embeddings for reference data
+        self._reference_embeddings = self.get_embedding(adata, batch_key=batch_key)
+
+        # Get labels, removing any NaN values
+        labels = adata.obs[target_column].values
+        valid_mask = pd.notna(labels)
+
+        if valid_mask.sum() == 0:
+            raise ValueError(f"No valid labels found in column '{target_column}'")
+
+        self._reference_embeddings = self._reference_embeddings[valid_mask]
+        self._reference_labels = labels[valid_mask]
+
+        # Train KNN classifier in embedding space
+        logger.info(f"Training KNN classifier with {len(self._reference_labels)} reference cells...")
+        self._knn_classifier = KNeighborsClassifier(
+            n_neighbors=self.n_neighbors,
+            n_jobs=-1
+        )
+        self._knn_classifier.fit(self._reference_embeddings, self._reference_labels)
+
+        self.is_trained = True
+        logger.info("✓ SCimilarity trained for label transfer")
+
     def predict(
         self,
         adata: AnnData,
         target_column: Optional[str] = None,
         batch_key: Optional[str] = None,
     ) -> np.ndarray:
-        """Predict cell types using SCimilarity + clustering.
+        """Predict cell types using SCimilarity.
+
+        If fit() was called, uses KNN label transfer from reference data.
+        Otherwise, performs clustering.
 
         Parameters
         ----------
         adata : AnnData
             Data to predict on
         target_column : str, optional
-            Not used (SCimilarity doesn't require labels)
+            If provided and exists in adata, performs within-data KNN transfer
         batch_key : str, optional
             Not used (SCimilarity handles batches implicitly)
 
         Returns
         -------
         predictions : np.ndarray
-            Cluster assignments
+            Predicted labels (if trained) or cluster assignments
         """
         # Get embeddings
         embeddings = self.get_embedding(adata, batch_key=batch_key)
 
+        # If we have a trained KNN classifier, use it for label transfer
+        if self._knn_classifier is not None:
+            logger.info("Using trained KNN classifier for label transfer...")
+            predictions = self._knn_classifier.predict(embeddings)
+            return predictions
+
+        # Otherwise, fall back to clustering or within-data transfer
         # Create temporary AnnData with embeddings
         adata_emb = AnnData(embeddings)
         adata_emb.obs_names = adata.obs_names
-
-        # Compute neighbors and cluster
-        logger.info("Computing neighborhood graph...")
-        sc.pp.neighbors(adata_emb, n_neighbors=self.n_neighbors, use_rep='X')
-
-        logger.info("Performing Leiden clustering...")
-        sc.tl.leiden(adata_emb, resolution=self.resolution)
-
-        predictions = adata_emb.obs['leiden'].values
 
         # If target column is provided and we want to do KNN label transfer
         if target_column is not None and target_column in adata.obs:
@@ -174,19 +232,28 @@ class SCimilarityModel(BaseModel):
             # Get labeled cells
             mask = ~adata.obs[target_column].isna()
             if mask.sum() > 0:
-                logger.info("Performing KNN label transfer in SCimilarity space...")
+                logger.info("Performing within-data KNN label transfer in SCimilarity space...")
 
                 X_train = embeddings[mask]
                 y_train = adata.obs[target_column].values[mask]
 
                 # Train KNN
-                knn = KNeighborsClassifier(n_neighbors=self.n_neighbors)
+                knn = KNeighborsClassifier(n_neighbors=self.n_neighbors, n_jobs=-1)
                 knn.fit(X_train, y_train)
 
                 # Predict all cells
                 predictions = knn.predict(embeddings)
+                return predictions
 
-        self.is_trained = True
+        # No labels available - do clustering
+        logger.info("Computing neighborhood graph...")
+        sc.pp.neighbors(adata_emb, n_neighbors=self.n_neighbors, use_rep='X')
+
+        logger.info("Performing Leiden clustering...")
+        sc.tl.leiden(adata_emb, resolution=self.resolution)
+
+        predictions = adata_emb.obs['leiden'].values
+
         return predictions
 
     def __repr__(self) -> str:

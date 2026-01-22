@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl import Pipeline
-from sccl.data import subset_data
+from sccl.data import subset_data, get_study_column, get_cell_type_column
 from sccl.evaluation import compute_metrics
 
 # Configuration
@@ -45,8 +45,14 @@ def main():
     print("\n1. Loading data...")
     adata = sc.read_h5ad(DATA_PATH)
 
+    # Detect columns
+    study_col = get_study_column(adata)
+    cell_type_col = get_cell_type_column(adata)
+    print(f"   Using study column: '{study_col}'")
+    print(f"   Using cell type column: '{cell_type_col}'")
+
     # Get valid studies
-    available_studies = adata.obs['Study'].unique() if 'Study' in adata.obs else []
+    available_studies = adata.obs[study_col].unique()
     valid_studies = [s for s in VAN_GALEN_STUDIES if s in available_studies]
 
     if len(valid_studies) < 3:
@@ -76,7 +82,7 @@ def main():
 
         # Evaluate
         metrics = compute_metrics(
-            y_true=adata_test.obs['Cell Type'].values,
+            y_true=adata_test.obs[cell_type_col].values,
             y_pred=predictions,
             metrics=['accuracy', 'ari', 'nmi']
         )

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl import Pipeline
-from sccl.data import subset_data
+from sccl.data import subset_data, get_cell_type_column
 
 # Configuration
 # DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
@@ -37,6 +37,10 @@ def main():
     # Load and subsample data
     print("\n1. Loading data...")
     adata = sc.read_h5ad(DATA_PATH)
+
+    # Detect columns
+    cell_type_col = get_cell_type_column(adata)
+    print(f"   Using cell type column: '{cell_type_col}'")
 
     print(f"\n2. Subsampling to {N_CELLS_FOR_TIMING:,} cells for timing...")
     adata_timing = subset_data(adata.copy(), n_cells=min(N_CELLS_FOR_TIMING, adata.n_obs))
@@ -59,7 +63,7 @@ def main():
     print("\n4. Testing Random Forest...")
     start = time.time()
     pipeline_rf = Pipeline(model="random_forest")
-    pred_rf = pipeline_rf.predict(adata_timing.copy(), target_column='Cell Type')
+    pred_rf = pipeline_rf.predict(adata_timing.copy(), target_column=cell_type_col)
     rf_time = time.time() - start
     timing_results.append({'method': 'Random Forest', 'time_seconds': rf_time})
     print(f"   ✓ Completed in {rf_time:.1f} seconds ({rf_time/60:.2f} minutes)")
@@ -68,7 +72,7 @@ def main():
     print("\n5. Testing SVM...")
     start = time.time()
     pipeline_svm = Pipeline(model="svm")
-    pred_svm = pipeline_svm.predict(adata_timing.copy(), target_column='Cell Type')
+    pred_svm = pipeline_svm.predict(adata_timing.copy(), target_column=cell_type_col)
     svm_time = time.time() - start
     timing_results.append({'method': 'SVM', 'time_seconds': svm_time})
     print(f"   ✓ Completed in {svm_time:.1f} seconds ({svm_time/60:.2f} minutes)")
