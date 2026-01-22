@@ -123,7 +123,8 @@ class SCimilarityModel(BaseModel):
         sc.pp.log1p(adata_aligned)
 
         # Get embeddings using CellAnnotation model
-        embeddings = self._ca_model.get_embeddings(adata_aligned)
+        # get_embeddings expects the expression matrix (X), not the full AnnData
+        embeddings = self._ca_model.get_embeddings(adata_aligned.X)
 
         self._embedding = embeddings
         return embeddings
