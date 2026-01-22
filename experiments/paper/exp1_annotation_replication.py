@@ -124,9 +124,14 @@ def main(args=None):
         n_cells = (adata.obs[study_col] == study).sum()
         print(f"     • {study}: {n_cells:,} cells")
 
-    adata = subset_data(adata, studies=valid_studies, study_col=study_col)
-    print(f"   Subset: {adata.n_obs:,} cells")
+    if True:
+        mask = adata.obs[study_col].isin(valid_studies)
+        # Subset and make a copy to preserve obs/var
+        adata_subset = adata[mask].copy()
+        # Save
+        adata_subset.write_h5ad("/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad")
 
+    adata = subset_data(adata, studies=valid_studies, study_col=study_col)
     # Run SCimilarity
     print("\n3. Running SCimilarity predictions...")
     pipeline = Pipeline(
