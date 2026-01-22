@@ -28,15 +28,23 @@ class SCimilarityModel(BaseModel):
         Resolution parameter for Leiden clustering
     species : str, default='human'
         Species for gene alignment ('human' or 'mouse')
+    classifier : str, default='knn'
+        Classifier to use on embeddings for label transfer.
+        Options: 'knn', 'random_forest', 'svm', 'logistic_regression'
+    classifier_params : dict, optional
+        Additional parameters to pass to the classifier
 
     Examples
     --------
+    >>> # Default: KNN on embeddings
     >>> model = SCimilarityModel()
-    >>> predictions = model.predict(adata)
+    >>> model.fit(adata_ref, target_column='cell_type')
+    >>> predictions = model.predict(adata_query)
     >>>
-    >>> # For mouse data
-    >>> model = SCimilarityModel(species='mouse')
-    >>> predictions = model.predict(adata)
+    >>> # Random Forest on embeddings
+    >>> model = SCimilarityModel(classifier='random_forest')
+    >>> model.fit(adata_ref, target_column='cell_type')
+    >>> predictions = model.predict(adata_query)
     """
 
     def __init__(
@@ -45,6 +53,8 @@ class SCimilarityModel(BaseModel):
         n_neighbors: int = 15,
         resolution: float = 1.0,
         species: str = 'human',
+        classifier: Optional[str] = 'knn',
+        classifier_params: Optional[dict] = None,
         **kwargs
     ):
         """Initialize SCimilarity model."""
@@ -53,6 +63,8 @@ class SCimilarityModel(BaseModel):
         self.n_neighbors = n_neighbors
         self.resolution = resolution
         self.species = species
+        self.classifier = classifier
+        self.classifier_params = classifier_params or {}
         self._scimilarity = None
         self._ca_model = None
         self._embedding = None
@@ -60,7 +72,7 @@ class SCimilarityModel(BaseModel):
         # For label transfer
         self._reference_embeddings = None
         self._reference_labels = None
-        self._knn_classifier = None
+        self._trained_classifier = None
 
     def _get_scimilarity(self):
         """Lazy load SCimilarity model."""
@@ -142,7 +154,7 @@ class SCimilarityModel(BaseModel):
     ) -> None:
         """Train SCimilarity for label transfer.
 
-        Computes embeddings for reference data and trains a KNN classifier
+        Computes embeddings for reference data and trains a classifier
         for label transfer to new data.
 
         Parameters
@@ -154,7 +166,6 @@ class SCimilarityModel(BaseModel):
         batch_key : str, optional
             Not used for SCimilarity
         """
-        from sklearn.neighbors import KNeighborsClassifier
         import pandas as pd
 
         logger.info("Training SCimilarity for label transfer...")
@@ -175,16 +186,42 @@ class SCimilarityModel(BaseModel):
         self._reference_embeddings = self._reference_embeddings[valid_mask]
         self._reference_labels = labels[valid_mask]
 
-        # Train KNN classifier in embedding space
-        logger.info(f"Training KNN classifier with {len(self._reference_labels)} reference cells...")
-        self._knn_classifier = KNeighborsClassifier(
-            n_neighbors=self.n_neighbors,
-            n_jobs=-1
-        )
-        self._knn_classifier.fit(self._reference_embeddings, self._reference_labels)
+        # Get classifier based on type
+        classifier_obj = self._get_classifier()
+
+        # Train classifier in embedding space
+        logger.info(f"Training {self.classifier} classifier with {len(self._reference_labels)} reference cells...")
+        self._trained_classifier = classifier_obj
+        self._trained_classifier.fit(self._reference_embeddings, self._reference_labels)
 
         self.is_trained = True
-        logger.info("✓ SCimilarity trained for label transfer")
+        logger.info(f"✓ SCimilarity trained for label transfer with {self.classifier}")
+
+    def _get_classifier(self):
+        """Get classifier instance based on type."""
+        from sklearn.neighbors import KNeighborsClassifier
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.svm import SVC
+        from sklearn.linear_model import LogisticRegression
+
+        if self.classifier == 'knn':
+            params = {'n_neighbors': self.n_neighbors, 'n_jobs': -1}
+            params.update(self.classifier_params)
+            return KNeighborsClassifier(**params)
+        elif self.classifier == 'random_forest':
+            params = {'n_estimators': 100, 'max_depth': 20, 'n_jobs': -1, 'random_state': 42}
+            params.update(self.classifier_params)
+            return RandomForestClassifier(**params)
+        elif self.classifier == 'svm':
+            params = {'kernel': 'rbf', 'probability': True, 'random_state': 42}
+            params.update(self.classifier_params)
+            return SVC(**params)
+        elif self.classifier == 'logistic_regression':
+            params = {'max_iter': 1000, 'n_jobs': -1, 'random_state': 42}
+            params.update(self.classifier_params)
+            return LogisticRegression(**params)
+        else:
+            raise ValueError(f"Unknown classifier type: {self.classifier}")
 
     def predict(
         self,
@@ -214,10 +251,10 @@ class SCimilarityModel(BaseModel):
         # Get embeddings
         embeddings = self.get_embedding(adata, batch_key=batch_key)
 
-        # If we have a trained KNN classifier, use it for label transfer
-        if self._knn_classifier is not None:
-            logger.info("Using trained KNN classifier for label transfer...")
-            predictions = self._knn_classifier.predict(embeddings)
+        # If we have a trained classifier, use it for label transfer
+        if self._trained_classifier is not None:
+            logger.info(f"Using trained {self.classifier} classifier for label transfer...")
+            predictions = self._trained_classifier.predict(embeddings)
             return predictions
 
         # Otherwise, fall back to clustering or within-data transfer
@@ -259,6 +296,6 @@ class SCimilarityModel(BaseModel):
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"SCimilarityModel(n_neighbors={self.n_neighbors}, "
-            f"resolution={self.resolution})"
+            f"SCimilarityModel(classifier={self.classifier}, "
+            f"n_neighbors={self.n_neighbors}, resolution={self.resolution})"
         )

@@ -37,10 +37,15 @@ QUERY_STUDIES = ['zhang_2023',
 ]
 
 MODELS_TO_TEST = {
-    'SCimilarity': 'scimilarity',
-    'Random Forest': 'random_forest',
-#    'SVM': 'svm',
-    'KNN': 'knn',
+    # SCimilarity with different classifiers on embeddings
+    'SCimilarity+KNN': ('scimilarity', {'classifier': 'knn'}),
+    'SCimilarity+RF': ('scimilarity', {'classifier': 'random_forest'}),
+    'SCimilarity+SVM': ('scimilarity', {'classifier': 'svm'}),
+
+    # Traditional ML on raw gene expression
+    'Random Forest': ('random_forest', {}),
+    'KNN': ('knn', {}),
+    'SVM': ('svm', {}),
 }
 
 
@@ -95,15 +100,18 @@ def main():
         print(f"  Query: {adata_query.n_obs:,} cells")
 
         # Test each model
-        for model_name, model_type in MODELS_TO_TEST.items():
+        for model_name, (model_type, model_params) in MODELS_TO_TEST.items():
             print(f"\n  {model_name}...", end=' ')
 
             try:
                 # Create pipeline
                 if model_type == 'scimilarity':
-                    pipeline = Pipeline(model=model_type, model_params={'model_path': MODEL_PATH})
+                    # Add model_path to params
+                    scim_params = {'model_path': MODEL_PATH}
+                    scim_params.update(model_params)
+                    pipeline = Pipeline(model=model_type, model_params=scim_params)
                 else:
-                    pipeline = Pipeline(model=model_type)
+                    pipeline = Pipeline(model=model_type, model_params=model_params if model_params else None)
 
                 # Train on reference (if needed)
                 if hasattr(pipeline.model, 'fit'):
