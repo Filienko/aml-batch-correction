@@ -22,6 +22,7 @@ from sccl.data import subset_data
 # Configuration
 DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
 # DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -46,8 +47,9 @@ def main():
 
     # Time SCimilarity
     print("\n3. Testing SCimilarity...")
+    print(f"   Using model: {MODEL_PATH}")
     start = time.time()
-    pipeline_scim = Pipeline(model="scimilarity")
+    pipeline_scim = Pipeline(model="scimilarity", model_params={'model_path': MODEL_PATH})
     pred_scim = pipeline_scim.predict(adata_timing.copy())
     scim_time = time.time() - start
     timing_results.append({'method': 'SCimilarity', 'time_seconds': scim_time})

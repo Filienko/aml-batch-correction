@@ -31,6 +31,7 @@ from sccl.evaluation import compute_metrics, compute_per_class_metrics, plot_con
 
 # Default configuration
 DEFAULT_DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad"
+DEFAULT_MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -77,6 +78,8 @@ Examples:
     parser.add_argument('--species', type=str, default='human',
                        choices=['human', 'mouse'],
                        help='Species for SCimilarity gene alignment')
+    parser.add_argument('--model-path', type=str, default=DEFAULT_MODEL_PATH,
+                       help=f'Path to SCimilarity model (default: {DEFAULT_MODEL_PATH})')
 
     return parser.parse_args()
 
@@ -134,10 +137,14 @@ def main(args=None):
     adata = subset_data(adata, studies=valid_studies, study_col=study_col)
     # Run SCimilarity
     print("\n3. Running SCimilarity predictions...")
+    print(f"   Using model: {args.model_path}")
     pipeline = Pipeline(
         model="scimilarity",
         batch_key=study_col,
-        model_params={'species': args.species}
+        model_params={
+            'species': args.species,
+            'model_path': args.model_path
+        }
     )
     predictions = pipeline.predict(adata.copy(), target_column=cell_type_col)
 

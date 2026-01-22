@@ -22,6 +22,7 @@ from sccl.evaluation import compute_metrics
 # Configuration
 DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
 # DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -70,7 +71,7 @@ def main():
         adata_test = subset_data(adata, studies=[held_out_study])
 
         # SCimilarity (doesn't need training on specific studies)
-        pipeline = Pipeline(model="scimilarity")
+        pipeline = Pipeline(model="scimilarity", model_params={'model_path': MODEL_PATH})
         predictions = pipeline.predict(adata_test.copy())
 
         # Evaluate

@@ -25,6 +25,7 @@ from sccl.evaluation import compute_metrics
 # Configuration
 DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_van_galen_subset.h5ad"
 # DATA_PATH = "/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas_50k_subset.h5ad"
+MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -89,7 +90,10 @@ def main():
 
             try:
                 # Create pipeline
-                pipeline = Pipeline(model=model_type)
+                if model_type == 'scimilarity':
+                    pipeline = Pipeline(model=model_type, model_params={'model_path': MODEL_PATH})
+                else:
+                    pipeline = Pipeline(model=model_type)
 
                 # Train on reference (if needed)
                 if hasattr(pipeline.model, 'fit'):
