@@ -10,7 +10,27 @@ SCCL provides a unified pipeline for:
 - **Label transfer** across datasets
 - **Model comparison** to find the best approach for your data
 
-## Quick Start
+---
+
+## 🚀 Quick Start
+
+**New to SCCL?** Start here: **[QUICKSTART.md](QUICKSTART.md)** - Step-by-step guide with complete examples.
+
+**Quick examples:**
+
+```bash
+# Run interactive demos (work on headless VM)
+python experiments/demos/quickstart_annotation.py     # Full annotation workflow
+python experiments/demos/quickstart_embeddings.py     # Work with embeddings
+python experiments/demos/01_basic_prediction.py       # Basic usage
+
+# Test all demos
+bash experiments/demos/test_all_demos.sh
+```
+
+---
+
+## Installation & Usage
 
 ### Installation
 
