@@ -253,7 +253,7 @@ def main():
     best_model = avg_by_model.index[0]
     best_ari = avg_by_model.loc[best_model, 'ari']
 
-    print(f"\n🏆 Best Model: {best_model}")
+    print(f"\n Best Model: {best_model}")
     print(f"   Average ARI (cross-platform): {best_ari:.4f}")
 
     # Check if SCimilarity models are in results
@@ -272,41 +272,6 @@ def main():
             print(f"\nSCimilarity vs Traditional ML (cross-platform):")
             print(f"  SCimilarity: ARI = {scim_ari:.4f}")
             print(f"  Best Traditional ({best_trad}): ARI = {trad_ari:.4f}")
-            print(f"  Improvement: {improvement:+.1f}%")
-
-            if scim_ari > trad_ari + 0.05:
-                print("\n✅ SCimilarity shows STRONG robustness to platform differences!")
-                print("   Foundation model embeddings successfully correct cross-platform batch effects.")
-            elif scim_ari > trad_ari:
-                print("\n✅ SCimilarity shows robustness to platform differences")
-            else:
-                print("\n⚠️ Traditional ML competitive on cross-platform transfer")
-
-    print("\n" + "="*80)
-    print("KEY FINDINGS")
-    print("="*80)
-    print("""
-This experiment demonstrates SCimilarity's ability to handle batch effects
-from different experimental platforms:
-
-Platform comparison:
-  • Reference: Seq-Well (van_galen_2019)
-  • Query:     10x Genomics (beneyto-calabuig-2023, jiang_2020, zhang_2023)
-
-SCimilarity advantages for cross-platform transfer:
-  1. Pre-trained on diverse data including multiple platforms
-  2. Shared embedding space corrects platform-specific biases
-  3. No need for explicit batch correction algorithms
-  4. Robust to technical variation while preserving biology
-
-Traditional ML challenges:
-  1. Gene expression distributions differ by platform
-  2. Platform-specific biases confound classifiers
-  3. Requires explicit batch correction preprocessing
-  4. May lose biological signal during correction
-    """)
-
-    print("="*80)
 
 
 if __name__ == "__main__":

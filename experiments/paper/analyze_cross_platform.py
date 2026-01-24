@@ -104,9 +104,6 @@ def main():
     print(f"  Average ARI: {best_scim_ari:.4f}")
     print(f"\nBest Traditional model:  {best_trad}")
     print(f"  Average ARI: {best_trad_ari:.4f}")
-    print(f"\nImprovement:")
-    print(f"  Absolute: +{absolute_diff:.4f} ARI")
-    print(f"  Relative: +{improvement:.1f}%")
 
     # 5. Per-study breakdown
     print("\n" + "="*80)
@@ -131,56 +128,6 @@ def main():
     study_best_df = pd.DataFrame(study_best)
     print(study_best_df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
 
-    # 6. Create publication table
-    print("\n" + "="*80)
-    print("Publication-Ready Table (LaTeX format)")
-    print("="*80)
-
-    # Create a nice table for publication
-    pub_table = df.pivot_table(
-        values=['ari', 'accuracy'],
-        index='query_study',
-        columns='model',
-        aggfunc='mean'
-    )
-
-    print("\nNote: Copy this to your paper:")
-    print("\\begin{table}[h]")
-    print("\\caption{Cross-platform label transfer performance (Seq-Well → 10x Genomics)}")
-    print("\\begin{tabular}{l" + "c" * len(df['model'].unique()) + "}")
-    print("\\toprule")
-
-    # Header
-    models = sorted(df['model'].unique())
-    print("Study & " + " & ".join(models) + " \\\\")
-    print("\\midrule")
-
-    # Data rows
-    for study in sorted(df['query_study'].unique()):
-        row_data = [study.replace('_', '\\_')]
-        for model in models:
-            study_model = df[(df['query_study'] == study) & (df['model'] == model)]
-            if len(study_model) > 0:
-                ari = study_model['ari'].values[0]
-                row_data.append(f"{ari:.3f}")
-            else:
-                row_data.append("--")
-        print(" & ".join(row_data) + " \\\\")
-
-    print("\\midrule")
-
-    # Average row
-    row_data = ["Average"]
-    for model in models:
-        model_df = df[df['model'] == model]
-        avg_ari = model_df['ari'].mean()
-        row_data.append(f"\\textbf{{{avg_ari:.3f}}}")
-    print(" & ".join(row_data) + " \\\\")
-
-    print("\\bottomrule")
-    print("\\end{tabular}")
-    print("\\end{table}")
-
     # 7. Save summary
     summary_file = RESULTS_DIR / "exp_cross_platform_analysis.txt"
     with open(summary_file, 'w') as f:
@@ -191,8 +138,6 @@ def main():
         f.write(f"Query: Multiple studies (10x Genomics)\n\n")
         f.write(f"Best SCimilarity: {best_scim} (ARI = {best_scim_ari:.4f})\n")
         f.write(f"Best Traditional: {best_trad} (ARI = {best_trad_ari:.4f})\n")
-        f.write(f"Improvement: +{improvement:.1f}% ({absolute_diff:+.4f} ARI)\n\n")
-        f.write("="*80 + "\n")
         f.write("Average Performance\n")
         f.write("="*80 + "\n")
         f.write(avg_performance.to_string())
