@@ -42,9 +42,9 @@ PLATFORM_INFO = {
     'van_galen_2019': 'Seq-Well',
     'beneyto-calabuig-2023': '10x Genomics',
     'jiang_2020': '10x Genomics',
-    'zhang_2023': '10x Genomics',
-    'velten_2021': '10x Genomics',
-    'zhai_2022': '10x Genomics',
+    #'zhang_2023': '10x Genomics',
+    #'velten_2021': '10x Genomics',
+    #'zhai_2022': '10x Genomics',
 }
 
 REFERENCE_STUDY = 'van_galen_2019'
@@ -54,7 +54,7 @@ REFERENCE_PLATFORM = PLATFORM_INFO[REFERENCE_STUDY]
 CROSS_PLATFORM_QUERIES = [
     'beneyto-calabuig-2023',
     'jiang_2020',
-    'zhang_2023',
+    #'zhang_2023',
 ]
 
 MODELS_TO_TEST = {
