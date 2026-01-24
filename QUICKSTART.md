@@ -196,11 +196,18 @@ python experiments/demos/02_model_comparison.py
 ```bash
 # Run all paper experiments
 cd experiments/paper
-python exp1_annotation_replication.py  # Clustering quality
-python exp2_label_transfer.py          # Cross-study transfer
-python exp3_computational_efficiency.py # Speed comparison
+python exp1_annotation_replication.py    # Clustering quality
+python exp2_label_transfer.py            # Cross-study transfer
+python exp3_computational_efficiency.py  # Speed comparison
 python exp4_cross_study_generalization.py # Robustness test
+python exp_cross_platform.py             # Cross-platform robustness
+python analyze_cross_platform.py         # Analyze platform results
 ```
+
+**Cross-Platform Experiment** demonstrates SCimilarity handles batch effects from different sequencing technologies:
+- Reference: Seq-Well (van_galen_2019)
+- Query: 10x Genomics (beneyto-calabuig-2023, jiang_2020, zhang_2023)
+- Shows robustness to platform-specific technical variation
 
 ## 🔍 Column Auto-Detection
 
