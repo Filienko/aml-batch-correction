@@ -74,13 +74,14 @@ TRANSFER_SCENARIOS = [
 
 MODELS_TO_TEST = {
     'SCimilarity+KNN': ('scimilarity', {'classifier': 'knn'}),
-    'SCimilarity+RF': ('scimilarity', {'classifier': 'random_forest'}),
-    'Random Forest': ('random_forest', {}),
-    'KNN': ('knn', {}),
+    # Comment out others temporarily to save memory - add back after first successful run
+    # 'SCimilarity+RF': ('scimilarity', {'classifier': 'random_forest'}),
+    # 'Random Forest': ('random_forest', {}),
+    # 'KNN': ('knn', {}),
 }
 
-# Memory optimization
-MAX_CELLS_PER_STUDY = 20000
+# Memory optimization - reduced to 10k to prevent OOM
+MAX_CELLS_PER_STUDY = 10000  # Further reduced from 20k
 
 
 def main():
@@ -94,20 +95,20 @@ def main():
         print(f"  {i}. {scenario['name']}")
         print(f"     {scenario['reference']} ({scenario['ref_platform']}) → {scenario['query']} ({scenario['query_platform']})")
 
-    # Load data
-    print("\n" + "="*80)
-    print("1. Loading data...")
-    print("="*80)
-    adata = sc.read_h5ad(DATA_PATH)
-
-    # Detect columns
-    study_col = get_study_column(adata)
-    cell_type_col = get_cell_type_column(adata)
-    print(f"   Using study column: '{study_col}'")
-    print(f"   Using cell type column: '{cell_type_col}'")
-
     # Results storage
     results = []
+
+    # Detect columns (load once to get column names, then delete)
+    print("\n" + "="*80)
+    print("1. Detecting column names...")
+    print("="*80)
+    adata_temp = sc.read_h5ad(DATA_PATH)
+    study_col = get_study_column(adata_temp)
+    cell_type_col = get_cell_type_column(adata_temp)
+    print(f"   Using study column: '{study_col}'")
+    print(f"   Using cell type column: '{cell_type_col}'")
+    del adata_temp
+    gc.collect()
 
     # Test each transfer scenario
     print("\n" + "="*80)
@@ -122,9 +123,17 @@ def main():
         print(f"  Platform:  {scenario['platform_match']}")
         print('='*80)
 
+        # Load full data fresh for each scenario (memory efficient)
+        print("  Loading data...")
+        adata = sc.read_h5ad(DATA_PATH)
+
         # Get reference and query data
         adata_ref = subset_data(adata, studies=[scenario['reference']])
         adata_query = subset_data(adata, studies=[scenario['query']])
+
+        # Delete full dataset immediately
+        del adata
+        gc.collect()
 
         # Subsample if needed
         if adata_ref.n_obs > MAX_CELLS_PER_STUDY:
