@@ -19,6 +19,7 @@ This tests SCimilarity's ability to correct platform-specific batch effects.
 
 import sys
 import warnings
+import gc
 warnings.filterwarnings('ignore')
 
 import pandas as pd
@@ -63,6 +64,9 @@ MODELS_TO_TEST = {
     'Random Forest': ('random_forest', {}),
     'KNN': ('knn', {}),
 }
+
+# Memory optimization: subsample large datasets
+MAX_CELLS_PER_STUDY = 20000  # Limit to prevent OOM
 
 
 def main():
@@ -139,6 +143,15 @@ def main():
         print('='*80)
 
         adata_query = subset_data(adata, studies=[query_study])
+
+        # Subsample if too large (memory optimization)
+        original_cells = adata_query.n_obs
+        if adata_query.n_obs > MAX_CELLS_PER_STUDY:
+            import numpy as np
+            print(f"  Original cells: {original_cells:,} (subsampling to {MAX_CELLS_PER_STUDY:,})")
+            indices = np.random.choice(adata_query.n_obs, MAX_CELLS_PER_STUDY, replace=False)
+            adata_query = adata_query[indices].copy()
+
         print(f"  Query cells: {adata_query.n_obs:,}")
         print(f"  Cell types:  {adata_query.obs[cell_type_col].nunique()}")
 
@@ -200,6 +213,21 @@ def main():
                     'nmi': 0,
                     'n_cells': adata_query.n_obs
                 })
+
+            finally:
+                # Memory cleanup after each model
+                del pipeline
+                if 'adata_ref_prep' in locals():
+                    del adata_ref_prep
+                if 'adata_query_prep' in locals():
+                    del adata_query_prep
+                if 'pred' in locals():
+                    del pred
+                gc.collect()
+
+        # Cleanup after each study
+        del adata_query
+        gc.collect()
 
     # Summary
     results_df = pd.DataFrame(results)
