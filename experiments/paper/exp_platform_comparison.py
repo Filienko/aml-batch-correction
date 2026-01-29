@@ -174,6 +174,18 @@ def main():
                 adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
                 pred = pipeline.model.predict(adata_query_prep, target_column=None)
 
+                # DEBUG: Show label comparison for CellTypist
+                if model_type == 'celltypist':
+                    gt_labels = set(adata_query.obs[cell_type_col].values)
+                    pred_labels = set(pred)
+                    print(f"\n    DEBUG - CellTypist labels:")
+                    print(f"    Ground truth ({len(gt_labels)} unique): {sorted(list(gt_labels))[:5]}...")
+                    print(f"    Predictions ({len(pred_labels)} unique): {sorted(list(pred_labels))[:5]}...")
+                    overlap = gt_labels & pred_labels
+                    print(f"    Overlap: {len(overlap)} labels")
+                    if len(overlap) == 0:
+                        print(f"    WARNING: NO LABEL OVERLAP!")
+
                 # Evaluate
                 metrics = compute_metrics(
                     y_true=adata_query.obs[cell_type_col].values,
