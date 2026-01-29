@@ -74,6 +74,7 @@ TRANSFER_SCENARIOS = [
 
 MODELS_TO_TEST = {
     'SCimilarity+KNN': ('scimilarity', {'classifier': 'knn'}),
+    'CellTypist': ('celltypist', {}),  # Custom trained on reference data
     # Comment out others temporarily to save memory - add back after first successful run
     # 'SCimilarity+RF': ('scimilarity', {'classifier': 'random_forest'}),
     # 'Random Forest': ('random_forest', {}),
