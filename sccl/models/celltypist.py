@@ -105,26 +105,31 @@ class CellTypistModel(BaseModel):
             sc.pp.normalize_total(adata_proc, target_sum=1e4)
             sc.pp.log1p(adata_proc)
 
-        # Load or download model
-        try:
-            if self.model_name.endswith('.pkl'):
-                # Check if it's a built-in model or custom path
-                try:
-                    model = ct.models.Model.load(self.model_name)
-                except:
-                    # Try downloading from CellTypist repository
+        # Use custom trained model if available, otherwise load pre-trained
+        if self._model is not None:
+            logger.info("Using custom trained model")
+            model = self._model
+        else:
+            # Load or download pre-trained model
+            try:
+                if self.model_name.endswith('.pkl'):
+                    # Check if it's a built-in model or custom path
+                    try:
+                        model = ct.models.Model.load(self.model_name)
+                    except:
+                        # Try downloading from CellTypist repository
+                        logger.info(f"Downloading model: {self.model_name}")
+                        model = ct.models.Model.load(model=self.model_name)
+                else:
+                    # Assume it's a model name that needs downloading
                     logger.info(f"Downloading model: {self.model_name}")
                     model = ct.models.Model.load(model=self.model_name)
-            else:
-                # Assume it's a model name that needs downloading
-                logger.info(f"Downloading model: {self.model_name}")
-                model = ct.models.Model.load(model=self.model_name)
 
-            self._model = model
-        except Exception as e:
-            logger.error(f"Error loading model: {e}")
-            logger.info("Available models: https://www.celltypist.org/models")
-            raise
+                self._model = model
+            except Exception as e:
+                logger.error(f"Error loading model: {e}")
+                logger.info("Available models: https://www.celltypist.org/models")
+                raise
 
         # Run prediction
         logger.info("Predicting cell types...")
