@@ -153,7 +153,7 @@ def main():
             metrics = compute_metrics(
                 y_true=adata_query.obs[cell_type_col].values,
                 y_pred=pred,
-                metrics=['accuracy', 'ari', 'nmi', 'f1_macro']
+                metrics=['accuracy', 'ari', 'nmi']
             )
 
             results.append({
@@ -161,11 +161,10 @@ def main():
                 'accuracy': metrics['accuracy'],
                 'ari': metrics['ari'],
                 'nmi': metrics['nmi'],
-                'f1_macro': metrics['f1_macro'],
                 **config_params
             })
 
-            print(f"✓ Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}, F1: {metrics['f1_macro']:.3f}")
+            print(f"✓ Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}")
 
         except Exception as e:
             print(f"✗ Error: {e}")
@@ -176,7 +175,6 @@ def main():
                 'accuracy': 0,
                 'ari': 0,
                 'nmi': 0,
-                'f1_macro': 0,
                 **config_params
             })
 
@@ -196,7 +194,7 @@ def main():
     df_results = df_results.sort_values('accuracy', ascending=False)
 
     print("\nRanked by Accuracy:")
-    print(df_results[['config', 'accuracy', 'ari', 'f1_macro']].to_string(index=False))
+    print(df_results[['config', 'accuracy', 'ari']].to_string(index=False))
 
     # Save results
     output_file = OUTPUT_DIR / "scimilarity_optimization.csv"
@@ -211,8 +209,7 @@ def main():
     print(f"Config: {best_config['config']}")
     print(f"Accuracy: {best_config['accuracy']:.3f} (baseline: 0.458)")
     print(f"ARI: {best_config['ari']:.3f} (baseline: 0.200)")
-    print(f"F1: {best_config['f1_macro']:.3f}")
-
+    
     improvement = (best_config['accuracy'] - 0.458) / 0.458 * 100
     print(f"\nImprovement: {improvement:+.1f}%")
 

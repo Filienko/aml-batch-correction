@@ -1,0 +1,17 @@
+================================================================================
+Cross-Platform Transfer Analysis Summary
+================================================================================
+
+Reference: van_galen_2019 (Seq-Well)
+Query: Multiple studies (10x Genomics)
+
+Best SCimilarity: SCimilarity+KNN (ARI = 0.5565)
+Best Traditional: KNN (ARI = 0.0257)
+Average Performance
+================================================================================
+                 accuracy       ari       nmi
+model                                        
+SCimilarity+KNN   0.74915  0.556500  0.579853
+SCimilarity+RF    0.70205  0.505435  0.544634
+KNN               0.34885  0.025705  0.038572
+Random Forest     0.37820  0.010718  0.011824
