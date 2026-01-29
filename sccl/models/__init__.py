@@ -20,6 +20,12 @@ try:
 except ImportError:
     pass
 
+try:
+    from .celltypist import CellTypistModel
+    AVAILABLE_MODELS['celltypist'] = CellTypistModel
+except ImportError:
+    pass
+
 
 def get_model(model_name: str, **kwargs) -> BaseModel:
     """Get a model instance by name.
