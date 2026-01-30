@@ -340,7 +340,7 @@ class SCimilarityModel(BaseModel):
             Refined predictions after label propagation
         """
         from sklearn.neighbors import NearestNeighbors
-        from scipy import stats
+        from collections import Counter
 
         # Build kNN graph in embedding space
         nn = NearestNeighbors(n_neighbors=self.propagation_neighbors + 1, n_jobs=-1)
@@ -354,9 +354,10 @@ class SCimilarityModel(BaseModel):
             neighbor_indices = indices[i]  # includes self
             neighbor_labels = initial_predictions[neighbor_indices]
 
-            # Majority vote
-            mode_result = stats.mode(neighbor_labels, keepdims=True)
-            refined_predictions[i] = mode_result.mode[0]
+            # Majority vote using Counter (handles strings properly)
+            label_counts = Counter(neighbor_labels)
+            most_common_label = label_counts.most_common(1)[0][0]
+            refined_predictions[i] = most_common_label
 
         # Count how many predictions changed
         n_changed = (initial_predictions != refined_predictions).sum()
