@@ -1,0 +1,77 @@
+================================================================================
+SCimilarity Hyperparameter Optimization
+================================================================================
+
+Scenario: beneyto-calabuig-2023 → jiang_2020 (Same Platform: 10x)
+Goal: Improve SCimilarity from 45.8% to match CellTypist's 71.9%
+
+Testing 10 configurations...
+================================================================================
+
+Loading data and detecting columns...
+  Study column: 'Study'
+  Cell type column: 'Cell Type'
+
+Extracting reference and query data...
+  Subsampling reference: 75,372 → 10,000 cells
+  Subsampling query: 73,810 → 10,000 cells
+
+  Reference: 10,000 cells, 15 types
+  Query:     10,000 cells, 16 types
+
+Preprocessing data...
+
+================================================================================
+Testing Configurations
+================================================================================
+
+[KNN-k15] ✓ Acc: 0.449, ARI: 0.190
+
+[KNN-k5] ✓ Acc: 0.457, ARI: 0.185
+
+[KNN-k10] ✓ Acc: 0.455, ARI: 0.187
+
+[KNN-k30] ✓ Acc: 0.449, ARI: 0.191
+
+[KNN-k50] ✓ Acc: 0.450, ARI: 0.194
+
+[RF-default] ✓ Acc: 0.397, ARI: 0.150
+
+[RF-deep] ✓ Acc: 0.391, ARI: 0.145
+
+[RF-shallow] ✓ Acc: 0.403, ARI: 0.144
+
+[LogReg] ✓ Acc: 0.439, ARI: 0.195
+
+[LogReg-L1] ✓ Acc: 0.454, ARI: 0.175
+
+================================================================================
+RESULTS
+================================================================================
+
+Ranked by Accuracy:
+    config  accuracy      ari
+    KNN-k5    0.4566 0.185064
+   KNN-k10    0.4551 0.186589
+ LogReg-L1    0.4544 0.175160
+   KNN-k50    0.4496 0.194413
+   KNN-k15    0.4493 0.190332
+   KNN-k30    0.4491 0.191472
+    LogReg    0.4390 0.195193
+RF-shallow    0.4034 0.143705
+RF-default    0.3969 0.149557
+   RF-deep    0.3907 0.144881
+
+✓ Results saved to: /home/daniilf/aml-batch-correction/experiments/paper/results/scimilarity_optimization.csv
+
+================================================================================
+BEST CONFIGURATION
+================================================================================
+Config: KNN-k5
+Accuracy: 0.457 (baseline: 0.458)
+ARI: 0.185 (baseline: 0.200)
+
+Improvement: -0.3%
+
+CellTypist accuracy: 0.719
+Gap to CellTypist: 0.262 (36.5%)

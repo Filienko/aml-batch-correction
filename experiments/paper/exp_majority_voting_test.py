@@ -126,7 +126,7 @@ def main():
                 metrics = compute_metrics(
                     y_true=adata_query.obs[cell_type_col].values,
                     y_pred=pred,
-                    metrics=['accuracy', 'ari', 'nmi', 'f1_macro']
+                    metrics=['accuracy', 'ari', 'nmi']
                 )
 
                 results.append({
@@ -136,7 +136,6 @@ def main():
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'nmi': metrics['nmi'],
-                    'f1_macro': metrics['f1_macro'],
                 })
 
                 print(f"✓ Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}")
@@ -167,7 +166,7 @@ def main():
         print(f"\n{scenario_name}:")
         scenario_df = df_results[df_results['scenario'] == scenario_name]
 
-        print(scenario_df[['majority_voting', 'method_type', 'accuracy', 'ari', 'f1_macro']].to_string(index=False))
+        print(scenario_df[['majority_voting', 'method_type', 'accuracy', 'ari']].to_string(index=False))
 
         # Calculate improvement
         pure = scenario_df[scenario_df['majority_voting'] == False].iloc[0]
