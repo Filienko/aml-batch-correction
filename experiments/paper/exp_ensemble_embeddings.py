@@ -161,9 +161,9 @@ def main():
         # 2. Train & Test CellTypist (The Real Baseline)
         print("\n  [Baseline-CellTypist]...", end=' ')
         try:
-            ct_model = CellTypistModel(model=None)
-            # Create a lightweight copy for CellTypist
+            ct_model = CellTypistModel(majority_voting=False)  # Pure supervised for fair comparison
             ct_model.fit(adata_ref, target_column=cell_type_col)
+            ct_pred = ct_model.predict(adata_query)  # Added missing prediction step!
 
             metrics = compute_metrics(
                 y_true=adata_query.obs[cell_type_col].values,
@@ -184,6 +184,12 @@ def main():
             print(f"✗ Error: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if 'ct_model' in locals():
+                del ct_model
+            if 'ct_pred' in locals():
+                del ct_pred
+            gc.collect()
 
         # 3. SCimilarity Embeddings
         print("\n  Computing SCimilarity embeddings...")
