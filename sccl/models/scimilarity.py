@@ -33,13 +33,24 @@ class SCimilarityModel(BaseModel):
         Options: 'knn', 'random_forest', 'svm', 'logistic_regression'
     classifier_params : dict, optional
         Additional parameters to pass to the classifier
+    label_propagation : bool, default=False
+        Whether to use label propagation for semi-supervised refinement.
+        Similar to CellTypist's majority voting. Uses query data structure
+        to smooth predictions via kNN majority voting in embedding space.
+    propagation_neighbors : int, default=15
+        Number of neighbors for label propagation (if enabled)
 
     Examples
     --------
-    >>> # Default: KNN on embeddings
+    >>> # Pure supervised: KNN on embeddings
     >>> model = SCimilarityModel()
     >>> model.fit(adata_ref, target_column='cell_type')
     >>> predictions = model.predict(adata_query)
+    >>>
+    >>> # Semi-supervised: with label propagation
+    >>> model = SCimilarityModel(label_propagation=True)
+    >>> model.fit(adata_ref, target_column='cell_type')
+    >>> predictions = model.predict(adata_query)  # Uses query structure
     >>>
     >>> # Random Forest on embeddings
     >>> model = SCimilarityModel(classifier='random_forest')
@@ -55,6 +66,8 @@ class SCimilarityModel(BaseModel):
         species: str = 'human',
         classifier: Optional[str] = 'knn',
         classifier_params: Optional[dict] = None,
+        label_propagation: bool = False,
+        propagation_neighbors: int = 15,
         **kwargs
     ):
         """Initialize SCimilarity model."""
@@ -65,6 +78,8 @@ class SCimilarityModel(BaseModel):
         self.species = species
         self.classifier = classifier
         self.classifier_params = classifier_params or {}
+        self.label_propagation = label_propagation
+        self.propagation_neighbors = propagation_neighbors
         self._scimilarity = None
         self._ca_model = None
         self._embedding = None
@@ -258,6 +273,12 @@ class SCimilarityModel(BaseModel):
         if self._trained_classifier is not None:
             logger.info(f"Using trained {self.classifier} classifier for label transfer...")
             predictions = self._trained_classifier.predict(embeddings)
+
+            # Apply label propagation if enabled (semi-supervised refinement)
+            if self.label_propagation:
+                logger.info(f"Applying label propagation with k={self.propagation_neighbors}...")
+                predictions = self._refine_with_label_propagation(embeddings, predictions)
+
             return predictions
 
         # Otherwise, fall back to clustering or within-data transfer
@@ -295,6 +316,54 @@ class SCimilarityModel(BaseModel):
         predictions = adata_emb.obs['leiden'].values
 
         return predictions
+
+    def _refine_with_label_propagation(
+        self,
+        embeddings: np.ndarray,
+        initial_predictions: np.ndarray
+    ) -> np.ndarray:
+        """Refine predictions using label propagation on query data.
+
+        This is semi-supervised: uses query cell-cell similarity to smooth predictions.
+        Similar to CellTypist's majority voting.
+
+        Parameters
+        ----------
+        embeddings : np.ndarray
+            Query embeddings
+        initial_predictions : np.ndarray
+            Initial predictions from classifier
+
+        Returns
+        -------
+        refined_predictions : np.ndarray
+            Refined predictions after label propagation
+        """
+        from sklearn.neighbors import NearestNeighbors
+        from scipy import stats
+
+        # Build kNN graph in embedding space
+        nn = NearestNeighbors(n_neighbors=self.propagation_neighbors + 1, n_jobs=-1)
+        nn.fit(embeddings)
+        distances, indices = nn.kneighbors(embeddings)
+
+        # For each cell, do majority voting over neighbors (including self)
+        refined_predictions = np.empty_like(initial_predictions)
+
+        for i in range(len(embeddings)):
+            neighbor_indices = indices[i]  # includes self
+            neighbor_labels = initial_predictions[neighbor_indices]
+
+            # Majority vote
+            mode_result = stats.mode(neighbor_labels, keepdims=True)
+            refined_predictions[i] = mode_result.mode[0]
+
+        # Count how many predictions changed
+        n_changed = (initial_predictions != refined_predictions).sum()
+        pct_changed = n_changed / len(initial_predictions) * 100
+        logger.info(f"Label propagation: {n_changed}/{len(initial_predictions)} ({pct_changed:.1f}%) predictions changed")
+
+        return refined_predictions
 
     def __repr__(self) -> str:
         """String representation."""
