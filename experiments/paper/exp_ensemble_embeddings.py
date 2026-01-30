@@ -76,8 +76,8 @@ def create_ensemble_classifiers():
     classifiers = {
         'knn': KNeighborsClassifier(n_neighbors=15, n_jobs=-1),
         'logreg': LogisticRegression(max_iter=1000, n_jobs=-1, random_state=42),
-        'rf': RandomForestClassifier(n_estimators=100, max_depth=20, n_jobs=-1, random_state=42),
-        'mlp': MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=500, alpha=0.001, random_state=42),
+        'rf': RandomForestClassifier(n_estimators=50, max_depth=15, n_jobs=-1, random_state=42),  # Reduced for memory
+        'mlp': MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=300, alpha=0.001, random_state=42),  # Reduced for memory
     }
     return classifiers
 
@@ -193,6 +193,10 @@ def main():
         embeddings_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
         embeddings_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
         labels_ref = adata_ref.obs[cell_type_col].values
+
+        # Delete preprocessed data to save memory
+        del adata_ref_prep, adata_query_prep
+        gc.collect()
 
         # 4. Individual Classifiers (With Refinement!)
         print("\n  Individual Classifiers:")
