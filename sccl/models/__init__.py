@@ -26,6 +26,12 @@ try:
 except ImportError:
     pass
 
+try:
+    from .sctab import ScTabModel
+    AVAILABLE_MODELS['sctab'] = ScTabModel
+except ImportError:
+    pass
+
 
 def get_model(model_name: str, **kwargs) -> BaseModel:
     """Get a model instance by name.
