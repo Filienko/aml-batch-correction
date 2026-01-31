@@ -50,7 +50,9 @@ def preprocess_data(
     adata : AnnData
         Preprocessed data
     """
-    if copy:
+    if adata.isbacked:
+        adata = adata.to_memory()
+    elif copy:
         adata = adata.copy()
 
     logger.info("Starting preprocessing...")
@@ -167,9 +169,10 @@ def subset_data(
     ...     obs_filter={'donor': ['D1', 'D2'], 'condition': 'healthy'}
     ... )
     """
-    if copy:
+    if adata.isbacked:
+        adata = adata.to_memory()
+    elif copy:
         adata = adata.copy()
-
     logger.info(f"Starting subset. Initial: {adata.n_obs} cells")
 
     # Build obs filter from shortcuts

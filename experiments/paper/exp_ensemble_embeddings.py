@@ -45,18 +45,28 @@ OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Set to None to use full data (Recommended for best performance)
-MAX_CELLS_PER_STUDY = 1000
+MAX_CELLS_PER_STUDY = 15000
 
 SCENARIOS = [
+#    {
+#        'name': 'Same-Platform: beneyto (10X Genomics) → Zheng (10X Genomics)',
+#        'reference': 'beneyto-calabuig-2023',
+#        'query': 'zhang_2023',
+#    },
+#    {
+#        'name': 'Cross-Platform: Zhai (SORT-seq) → Zheng (10X Genomics)',
+#        'reference': 'zhai_2022',
+#        'query': 'zhang_2023',
+#    },
+#    {
+#        'name': 'Cross-Platform: van_galen (Seq-Well) → velten_2021 (Muta-Seq)',
+#        'reference': 'van_galen_2019',
+#        'query': 'velten_2021',
+#    },
     {
-        'name': 'Same-Platform: beneyto → jiang',
-        'reference': 'beneyto-calabuig-2023',
-        'query': 'jiang_2020',
-    },
-    {
-        'name': 'Cross-Platform: van_galen → jiang',
+        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
         'reference': 'van_galen_2019',
-        'query': 'jiang_2020',
+        'query': 'beneyto-calabuig-2023',
     },
 ]
 
@@ -134,7 +144,7 @@ def main():
     results = []
 
     print("\nLoading data...")
-    adata = sc.read_h5ad(DATA_PATH)
+    adata = sc.read_h5ad(DATA_PATH, backed='r')
     study_col = get_study_column(adata)
     cell_type_col = get_cell_type_column(adata)
 
@@ -144,8 +154,8 @@ def main():
         print('='*80)
 
         # 1. Prepare Data
-        adata_ref = subset_data(adata, studies=[scenario['reference']])
-        adata_query = subset_data(adata, studies=[scenario['query']])
+        adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
+        adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
 
         if MAX_CELLS_PER_STUDY:
             if adata_ref.n_obs > MAX_CELLS_PER_STUDY:
@@ -161,7 +171,7 @@ def main():
         # 2. Train & Test CellTypist (The Real Baseline)
         print("\n  [Baseline-CellTypist]...", end=' ')
         try:
-            ct_model = CellTypistModel(majority_voting=False)  # Pure supervised for fair comparison
+            ct_model = CellTypistModel(majority_voting=True)  # Pure supervised for fair comparison
             ct_model.fit(adata_ref, target_column=cell_type_col)
             ct_pred = ct_model.predict(adata_query)  # Added missing prediction step!
 
