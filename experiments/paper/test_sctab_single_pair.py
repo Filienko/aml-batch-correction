@@ -645,6 +645,122 @@ class ScTabInference:
 
 
 # ==============================================================================
+# LABEL HARMONIZATION
+# ==============================================================================
+
+# Mapping from scTab Cell Ontology labels to common abbreviated labels
+SCTAB_LABEL_MAP = {
+    # B cells
+    'B cell': 'B',
+    'naive B cell': 'B',
+    'memory B cell': 'B',
+    'plasma cell': 'Plasma',
+    'plasmablast': 'Plasma',
+
+    # Monocytes
+    'CD14-positive monocyte': 'CD14+ Mono',
+    'CD14-positive, CD16-negative classical monocyte': 'CD14+ Mono',
+    'CD14-low, CD16-positive monocyte': 'CD16+ Mono',
+    'CD16-positive, CD14-low monocyte': 'CD16+ Mono',
+    'classical monocyte': 'CD14+ Mono',
+    'non-classical monocyte': 'CD16+ Mono',
+    'intermediate monocyte': 'CD14+ Mono',
+
+    # NK cells
+    'natural killer cell': 'NK',
+    'CD16-negative, CD56-bright natural killer cell, human': 'NK',
+    'CD16-positive, CD56-dim natural killer cell, human': 'NK',
+
+    # T cells
+    'T cell': 'T',
+    'CD4-positive, alpha-beta T cell': 'CD4+ T',
+    'CD8-positive, alpha-beta T cell': 'CD8+ T',
+    'CD4-positive helper T cell': 'CD4+ T',
+    'CD4-positive, alpha-beta memory T cell': 'CD4+ T',
+    'CD8-positive, alpha-beta memory T cell': 'CD8+ T',
+    'naive thymus-derived CD4-positive, alpha-beta T cell': 'CD4+ T',
+    'naive thymus-derived CD8-positive, alpha-beta T cell': 'CD8+ T',
+    'regulatory T cell': 'Treg',
+    'gamma-delta T cell': 'gdT',
+
+    # Dendritic cells
+    'dendritic cell': 'DC',
+    'conventional dendritic cell': 'cDC',
+    'plasmacytoid dendritic cell': 'pDC',
+    'CD1c-positive myeloid dendritic cell': 'cDC',
+    'myeloid dendritic cell': 'cDC',
+
+    # Progenitors / Stem cells
+    'hematopoietic stem cell': 'HSPC',
+    'hematopoietic multipotent progenitor cell': 'HSPC',
+    'common myeloid progenitor': 'CMP',
+    'granulocyte monocyte progenitor cell': 'GMP',
+    'megakaryocyte-erythroid progenitor cell': 'MEP',
+    'common lymphoid progenitor': 'CLP',
+    'megakaryocyte': 'MEP',
+    'erythroid lineage cell': 'Erythroid',
+    'erythrocyte': 'Erythroid',
+    'proerythroblast': 'Erythroid',
+    'erythroblast': 'Erythroid',
+
+    # Granulocytes
+    'neutrophil': 'Neutrophil',
+    'basophil': 'Basophil',
+    'eosinophil': 'Eosinophil',
+    'mast cell': 'Mast',
+}
+
+
+def harmonize_labels(predictions, label_map=None, ground_truth_labels=None):
+    """
+    Harmonize scTab predictions to match ground truth label vocabulary.
+
+    Parameters
+    ----------
+    predictions : array-like
+        scTab predicted labels (Cell Ontology terms)
+    label_map : dict, optional
+        Custom mapping from scTab labels to target labels
+    ground_truth_labels : array-like, optional
+        Ground truth labels to help with fuzzy matching
+
+    Returns
+    -------
+    harmonized : np.ndarray
+        Harmonized predictions
+    """
+    if label_map is None:
+        label_map = SCTAB_LABEL_MAP
+
+    predictions = np.asarray(predictions)
+    harmonized = predictions.copy()
+
+    # Apply direct mapping
+    for scTab_label, target_label in label_map.items():
+        mask = predictions == scTab_label
+        harmonized[mask] = target_label
+
+    # Try fuzzy matching for unmapped labels if ground truth is provided
+    if ground_truth_labels is not None:
+        gt_labels_set = set(np.unique(ground_truth_labels[pd.notna(ground_truth_labels)]))
+        unmapped = set(np.unique(harmonized)) - gt_labels_set
+
+        for pred_label in unmapped:
+            # Try simple substring matching
+            pred_lower = pred_label.lower()
+            for gt_label in gt_labels_set:
+                gt_lower = gt_label.lower()
+                # Check if ground truth label is substring of prediction
+                if gt_lower in pred_lower or pred_lower in gt_lower:
+                    mask = harmonized == pred_label
+                    harmonized[mask] = gt_label
+                    print(f"  Fuzzy mapped: '{pred_label}' -> '{gt_label}'")
+                    break
+
+    return harmonized
+
+
+# ==============================================================================
 # EVALUATION
 # ==============================================================================
 
@@ -846,18 +962,36 @@ def main():
     print("RUNNING PREDICTION")
     print('='*60)
 
-    y_pred = sctab.predict_from_matrix(X_query, gene_names)
+    y_pred_raw = sctab.predict_from_matrix(X_query, gene_names)
 
     elapsed = time.time() - start_time
     print(f"\nTotal inference time: {elapsed:.1f} seconds")
 
-    # Evaluate
-    metrics = evaluate_predictions(y_true, y_pred, method_name="scTab")
+    # Harmonize labels (scTab uses Cell Ontology, dataset may use abbreviations)
+    print(f"\n{'='*60}")
+    print("LABEL HARMONIZATION")
+    print('='*60)
+    print("scTab uses Cell Ontology labels, harmonizing to match ground truth...")
+
+    y_pred = harmonize_labels(y_pred_raw, ground_truth_labels=y_true)
+
+    # Show mapping results
+    n_mapped = np.sum(y_pred != y_pred_raw)
+    print(f"  Mapped {n_mapped}/{len(y_pred)} predictions to ground truth vocabulary")
+
+    # Evaluate with harmonized labels
+    print("\n--- Evaluation with HARMONIZED labels ---")
+    metrics = evaluate_predictions(y_true, y_pred, method_name="scTab (harmonized)")
     metrics['time_seconds'] = elapsed
     metrics['reference_study'] = REFERENCE_STUDY
     metrics['query_study'] = QUERY_STUDY
 
-    # Label overlap analysis
+    # Also show raw (unharmonized) metrics for comparison
+    print("\n--- Evaluation with RAW labels (for reference) ---")
+    metrics_raw = evaluate_predictions(y_true, y_pred_raw, method_name="scTab (raw)")
+
+    # Label overlap analysis (harmonized)
+    print("\n--- Label overlap (harmonized) ---")
     label_overlap_analysis(y_true, y_pred)
 
     # Save results
