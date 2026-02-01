@@ -470,12 +470,12 @@ class ScTabInference:
 
         print("\nLoading scTab model from checkpoint...")
 
-        # Load checkpoint
+        # Load checkpoint (weights_only=False needed for PyTorch 2.6+ as checkpoint contains optimizer state)
         if torch.cuda.is_available():
-            ckpt = torch.load(self.checkpoint_path)
+            ckpt = torch.load(self.checkpoint_path, weights_only=False)
             self.device = 'cuda'
         else:
-            ckpt = torch.load(self.checkpoint_path, map_location=torch.device('cpu'))
+            ckpt = torch.load(self.checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
             self.device = 'cpu'
 
         print(f"  Using device: {self.device}")
