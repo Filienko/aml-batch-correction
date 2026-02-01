@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Standalone scTab Evaluation Script
-===================================
+Standalone scTab Evaluation Script (Minimal Dependencies)
+=========================================================
 Test scTab foundation model on a single reference/query study pair.
+
+This version uses h5py to read h5ad files directly, avoiding scanpy/anndata
+dependency conflicts.
 
 Following official scTab inference steps from:
 https://github.com/theislab/scTab
@@ -29,6 +32,7 @@ Usage:
 
 Requirements:
     - cellnet package: pip install git+https://github.com/theislab/scTab.git
+    - h5py, numpy, pandas, torch, pyyaml, scipy, scikit-learn, tqdm
     - scTab checkpoint files
     - merlin model directory with:
         - var.parquet (gene order)
@@ -42,12 +46,12 @@ import time
 from pathlib import Path
 from collections import OrderedDict
 
+import h5py
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import torch
 import yaml
-from scipy.sparse import csc_matrix
+from scipy.sparse import csc_matrix, csr_matrix
 from sklearn.metrics import (
     accuracy_score,
     adjusted_rand_score,
@@ -84,31 +88,265 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 # ==============================================================================
-# HELPER FUNCTIONS
+# H5AD DATA LOADING (without scanpy/anndata)
 # ==============================================================================
 
-def detect_columns(adata):
-    """Auto-detect study and cell type columns."""
-    study_candidates = ['study', 'Study', 'dataset', 'batch', 'sample']
-    cell_type_candidates = ['cell_type', 'Cell Type', 'celltype', 'cell_label', 'annotation']
+class H5ADReader:
+    """Minimal h5ad reader using h5py directly."""
 
-    study_col = next((c for c in study_candidates if c in adata.obs.columns), None)
-    cell_type_col = next((c for c in cell_type_candidates if c in adata.obs.columns), None)
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self._file = None
 
-    return study_col, cell_type_col
+    def __enter__(self):
+        self._file = h5py.File(self.filepath, 'r')
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._file:
+            self._file.close()
+
+    def get_obs(self):
+        """Read obs (cell metadata) as DataFrame."""
+        obs = self._file['obs']
+
+        # Handle different h5ad formats
+        if isinstance(obs, h5py.Dataset):
+            # Structured array format
+            return pd.DataFrame(obs[()])
+        else:
+            # Group format (newer anndata)
+            data = {}
+            index = None
+
+            # Get index
+            if '_index' in obs:
+                index = obs['_index'][()].astype(str)
+            elif '__categories' in obs:
+                # Handle categorical index
+                pass
+
+            # Get columns
+            for key in obs.keys():
+                if key.startswith('_') or key == '__categories':
+                    continue
+                try:
+                    col_data = obs[key]
+                    if isinstance(col_data, h5py.Group):
+                        # Categorical data
+                        if 'categories' in col_data and 'codes' in col_data:
+                            categories = col_data['categories'][()].astype(str)
+                            codes = col_data['codes'][()]
+                            # Map codes to categories
+                            data[key] = categories[codes]
+                        else:
+                            continue
+                    else:
+                        arr = col_data[()]
+                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
+                            arr = arr.astype(str)
+                        data[key] = arr
+                except Exception as e:
+                    print(f"  Warning: Could not read obs column '{key}': {e}")
+                    continue
+
+            df = pd.DataFrame(data)
+            if index is not None and len(index) == len(df):
+                df.index = index
+            return df
+
+    def get_var(self, use_raw=True):
+        """Read var (gene metadata) as DataFrame."""
+        if use_raw and 'raw' in self._file and 'var' in self._file['raw']:
+            var = self._file['raw']['var']
+        else:
+            var = self._file['var']
+
+        # Handle different formats
+        if isinstance(var, h5py.Dataset):
+            return pd.DataFrame(var[()])
+        else:
+            data = {}
+            index = None
+
+            if '_index' in var:
+                index = var['_index'][()].astype(str)
+
+            for key in var.keys():
+                if key.startswith('_'):
+                    continue
+                try:
+                    col_data = var[key]
+                    if isinstance(col_data, h5py.Group):
+                        if 'categories' in col_data and 'codes' in col_data:
+                            categories = col_data['categories'][()].astype(str)
+                            codes = col_data['codes'][()]
+                            data[key] = categories[codes]
+                    else:
+                        arr = col_data[()]
+                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
+                            arr = arr.astype(str)
+                        data[key] = arr
+                except Exception as e:
+                    print(f"  Warning: Could not read var column '{key}': {e}")
+                    continue
+
+            df = pd.DataFrame(data)
+            if index is not None and len(index) == len(df):
+                df.index = index
+            return df
+
+    def get_X(self, use_raw=True, cell_indices=None):
+        """Read X matrix (optionally from raw)."""
+        if use_raw and 'raw' in self._file and 'X' in self._file['raw']:
+            X_group = self._file['raw']['X']
+        else:
+            X_group = self._file['X']
+
+        # Check if sparse
+        if isinstance(X_group, h5py.Group):
+            # Sparse matrix
+            data = X_group['data'][()]
+            indices = X_group['indices'][()]
+            indptr = X_group['indptr'][()]
+
+            # Determine shape
+            if 'shape' in X_group.attrs:
+                shape = tuple(X_group.attrs['shape'])
+            else:
+                # Infer shape
+                n_rows = len(indptr) - 1
+                n_cols = indices.max() + 1 if len(indices) > 0 else 0
+                shape = (n_rows, n_cols)
+
+            # Create sparse matrix (CSR format is typical for h5ad)
+            X = csr_matrix((data, indices, indptr), shape=shape)
+
+            if cell_indices is not None:
+                X = X[cell_indices]
+
+            return X
+        else:
+            # Dense matrix
+            if cell_indices is not None:
+                return X_group[cell_indices]
+            return X_group[()]
+
+    def get_n_obs(self):
+        """Get number of cells."""
+        if 'obs' in self._file:
+            obs = self._file['obs']
+            if isinstance(obs, h5py.Dataset):
+                return len(obs)
+            elif '_index' in obs:
+                return len(obs['_index'])
+            else:
+                # Try to infer from first column
+                for key in obs.keys():
+                    if not key.startswith('_'):
+                        return len(obs[key])
+        return 0
+
+    def get_n_vars(self, use_raw=True):
+        """Get number of genes."""
+        if use_raw and 'raw' in self._file and 'var' in self._file['raw']:
+            var = self._file['raw']['var']
+        else:
+            var = self._file['var']
+
+        if isinstance(var, h5py.Dataset):
+            return len(var)
+        elif '_index' in var:
+            return len(var['_index'])
+        return 0
 
 
-def subset_study(adata, study_col, study_name, max_cells=None):
-    """Extract cells from a specific study, optionally subsampling."""
-    mask = adata.obs[study_col] == study_name
-    adata_subset = adata[mask].copy()
+def load_h5ad_data(filepath, study_col, cell_type_col, study_name, max_cells=None, use_raw=True):
+    """
+    Load data for a specific study from h5ad file.
 
-    if max_cells and adata_subset.n_obs > max_cells:
-        indices = np.random.choice(adata_subset.n_obs, max_cells, replace=False)
-        adata_subset = adata_subset[indices].copy()
+    Parameters
+    ----------
+    filepath : str or Path
+        Path to h5ad file
+    study_col : str
+        Column name for study/batch
+    cell_type_col : str
+        Column name for cell type labels
+    study_name : str
+        Name of study to extract
+    max_cells : int, optional
+        Maximum number of cells to return
+    use_raw : bool
+        Whether to use raw counts (recommended for scTab)
 
-    return adata_subset
+    Returns
+    -------
+    X : sparse matrix
+        Count matrix (cells x genes)
+    obs : DataFrame
+        Cell metadata
+    var : DataFrame
+        Gene metadata
+    """
+    with H5ADReader(filepath) as reader:
+        print(f"  Reading obs...")
+        obs = reader.get_obs()
 
+        # Filter to study
+        if study_col not in obs.columns:
+            raise ValueError(f"Study column '{study_col}' not found. Available: {obs.columns.tolist()}")
+
+        mask = obs[study_col] == study_name
+        indices = np.where(mask)[0]
+
+        if len(indices) == 0:
+            raise ValueError(f"No cells found for study '{study_name}'")
+
+        # Subsample if needed
+        if max_cells and len(indices) > max_cells:
+            np.random.seed(42)
+            indices = np.random.choice(indices, max_cells, replace=False)
+            indices = np.sort(indices)
+
+        print(f"  Reading var...")
+        var = reader.get_var(use_raw=use_raw)
+
+        print(f"  Reading X matrix for {len(indices)} cells...")
+        X = reader.get_X(use_raw=use_raw, cell_indices=indices)
+
+        # Filter obs to selected indices
+        obs = obs.iloc[indices].reset_index(drop=True)
+
+        return X, obs, var
+
+
+def detect_columns(filepath):
+    """Auto-detect study and cell type columns from h5ad file."""
+    study_candidates = ['study', 'Study', 'dataset', 'batch', 'sample', 'Batch']
+    cell_type_candidates = ['cell_type', 'Cell Type', 'celltype', 'cell_label',
+                            'annotation', 'Annotation', 'CellType']
+
+    with H5ADReader(filepath) as reader:
+        obs = reader.get_obs()
+        columns = obs.columns.tolist()
+
+    study_col = next((c for c in study_candidates if c in columns), None)
+    cell_type_col = next((c for c in cell_type_candidates if c in columns), None)
+
+    return study_col, cell_type_col, columns
+
+
+def list_studies(filepath, study_col):
+    """List available studies in the h5ad file."""
+    with H5ADReader(filepath) as reader:
+        obs = reader.get_obs()
+        return obs[study_col].unique().tolist()
+
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 
 def sf_log1p_norm(x):
     """Normalize each cell to have 10000 counts and apply log(x+1) transform."""
@@ -148,11 +386,8 @@ def streamline_count_matrix(X, gene_names, model_gene_names, use_cellnet=True):
         try:
             from cellnet.utils.data_loading import streamline_count_matrix as cellnet_streamline
             print("  Using cellnet.utils.data_loading.streamline_count_matrix")
-            return cellnet_streamline(
-                csc_matrix(X) if not isinstance(X, csc_matrix) else X,
-                gene_names,
-                model_gene_names
-            )
+            X_csc = csc_matrix(X) if not isinstance(X, csc_matrix) else X
+            return cellnet_streamline(X_csc, gene_names, model_gene_names)
         except ImportError:
             print("  cellnet not available, using manual implementation")
 
@@ -204,6 +439,7 @@ class ScTabInference:
         self.genes_from_model = None
         self.cell_type_mapping = None
         self.model_params = None
+        self.device = None
 
         self._load_metadata()
 
@@ -237,12 +473,12 @@ class ScTabInference:
         # Load checkpoint
         if torch.cuda.is_available():
             ckpt = torch.load(self.checkpoint_path)
-            device = 'cuda'
+            self.device = 'cuda'
         else:
             ckpt = torch.load(self.checkpoint_path, map_location=torch.device('cpu'))
-            device = 'cpu'
+            self.device = 'cpu'
 
-        print(f"  Using device: {device}")
+        print(f"  Using device: {self.device}")
 
         # Extract TabNet weights
         tabnet_weights = OrderedDict()
@@ -273,30 +509,24 @@ class ScTabInference:
         model.load_state_dict(tabnet_weights)
         model.eval()
 
-        if device == 'cuda':
+        if self.device == 'cuda':
             model = model.cuda()
 
         self.model = model
-        self.device = device
         print("  Model loaded successfully")
 
         return model
 
-    def predict(self, adata, use_dataloader=True):
+    def predict_from_matrix(self, X, gene_names):
         """
-        Predict cell types using scTab.
-
-        Following Phase 3 of scTab inference:
-        1. Apply sf-log1p normalization (scale to 10k + log1p)
-        2. Run batched inference
-        3. Map integer predictions to labels via cell_type.parquet
+        Predict cell types from count matrix.
 
         Parameters
         ----------
-        adata : AnnData
-            Data with raw counts (use adata.raw if available)
-        use_dataloader : bool
-            Try to use cellnet's dataloader_factory if available
+        X : sparse matrix or array
+            Raw count matrix (cells x genes)
+        gene_names : array-like
+            Gene names matching columns of X
 
         Returns
         -------
@@ -305,44 +535,16 @@ class ScTabInference:
         """
         model = self._load_model()
 
-        # Phase 1: Get raw counts (no normalization yet)
-        if adata.raw is not None:
-            adata_raw = adata.raw.to_adata()
-            print(f"  Using adata.raw (raw counts)")
-        else:
-            adata_raw = adata.copy()
-            print(f"  Using adata.X directly (assuming raw counts)")
+        print(f"  Input: {X.shape[0]} cells x {X.shape[1]} genes")
 
-        # Get gene names - prefer feature_name to match var.parquet
-        if 'feature_name' in adata_raw.var.columns:
-            gene_names = adata_raw.var['feature_name'].values
-        elif 'gene_ids' in adata_raw.var.columns:
-            gene_names = adata_raw.var['gene_ids'].values
-        else:
-            gene_names = adata_raw.var.index.values
-
-        print(f"  Input: {adata_raw.n_obs} cells x {adata_raw.n_vars} genes")
-
-        # Align genes to model's expected order (from var.parquet)
-        # Pass csc_matrix for efficient column slicing
-        X = csc_matrix(adata_raw.X) if hasattr(adata_raw.X, 'toarray') else adata_raw.X
+        # Align genes to model's expected order
         x_streamlined = streamline_count_matrix(
             X,
             gene_names,
             self.genes_from_model['feature_name'].values
         )
 
-        # Try to use cellnet's dataloader_factory
-        loader = None
-        if use_dataloader:
-            try:
-                from cellnet.utils.data_loading import dataloader_factory
-                loader = dataloader_factory(x_streamlined, batch_size=self.batch_size)
-                print(f"  Using cellnet dataloader_factory")
-            except ImportError:
-                print(f"  cellnet dataloader not available, using manual batching")
-
-        # Phase 3: Run inference
+        # Run inference in batches
         n_cells = x_streamlined.shape[0]
         preds = []
 
@@ -350,41 +552,25 @@ class ScTabInference:
         print(f"  Batch size: {self.batch_size}")
 
         with torch.no_grad():
-            if loader is not None:
-                # Use cellnet's dataloader
-                for batch in tqdm(loader):
-                    x_batch = batch[0]['X']
-                    if not isinstance(x_batch, torch.Tensor):
-                        x_batch = torch.from_numpy(x_batch).float()
-                    if self.device == 'cuda':
-                        x_batch = x_batch.cuda()
+            for i in tqdm(range(0, n_cells, self.batch_size)):
+                batch_x = x_streamlined[i:i + self.batch_size]
 
-                    # Apply sf-log1p normalization
-                    x_input = sf_log1p_norm(x_batch)
-                    logits, _ = self.model(x_input)
-                    batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
-                    preds.append(batch_preds)
-            else:
-                # Manual batching
-                for i in tqdm(range(0, n_cells, self.batch_size)):
-                    batch_x = x_streamlined[i:i + self.batch_size]
+                # Convert to tensor
+                x_tensor = torch.from_numpy(batch_x).float()
+                if self.device == 'cuda':
+                    x_tensor = x_tensor.cuda()
 
-                    # Convert to tensor
-                    x_tensor = torch.from_numpy(batch_x).float()
-                    if self.device == 'cuda':
-                        x_tensor = x_tensor.cuda()
+                # Apply sf-log1p normalization
+                x_input = sf_log1p_norm(x_tensor)
 
-                    # Apply sf-log1p normalization
-                    x_input = sf_log1p_norm(x_tensor)
-
-                    # Predict
-                    logits, _ = self.model(x_input)
-                    batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
-                    preds.append(batch_preds)
+                # Predict
+                logits, _ = self.model(x_input)
+                batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
+                preds.append(batch_preds)
 
         preds = np.hstack(preds)
 
-        # Map integer predictions to cell type labels via cell_type.parquet
+        # Map integer predictions to cell type labels
         predictions = self.cell_type_mapping.loc[preds]['label'].values
 
         print(f"  Predicted {len(np.unique(predictions))} unique cell types")
@@ -497,7 +683,7 @@ def main():
     """Run scTab evaluation on a single reference/query pair."""
 
     print("="*80)
-    print("scTab Single-Pair Evaluation")
+    print("scTab Single-Pair Evaluation (Minimal Dependencies)")
     print("="*80)
     print(f"\nConfiguration:")
     print(f"  Data:       {DATA_PATH}")
@@ -510,22 +696,26 @@ def main():
     # Set random seed for reproducibility
     np.random.seed(42)
 
-    # Load data
+    # Detect columns
     print(f"\n{'='*60}")
-    print("LOADING DATA")
+    print("DETECTING DATA STRUCTURE")
     print('='*60)
 
-    adata = sc.read_h5ad(DATA_PATH)
-    print(f"Loaded atlas: {adata.n_obs:,} cells x {adata.n_vars:,} genes")
-
-    # Detect columns
-    study_col, cell_type_col = detect_columns(adata)
+    study_col, cell_type_col, all_columns = detect_columns(DATA_PATH)
+    print(f"Available columns: {all_columns[:10]}..." if len(all_columns) > 10 else f"Available columns: {all_columns}")
     print(f"Study column:     {study_col}")
     print(f"Cell type column: {cell_type_col}")
 
+    if study_col is None:
+        print("ERROR: Could not detect study column!")
+        return
+    if cell_type_col is None:
+        print("ERROR: Could not detect cell type column!")
+        return
+
     # List available studies
-    available_studies = adata.obs[study_col].unique()
-    print(f"\nAvailable studies: {list(available_studies)}")
+    available_studies = list_studies(DATA_PATH, study_col)
+    print(f"\nAvailable studies: {available_studies}")
 
     # Check studies exist
     if REFERENCE_STUDY not in available_studies:
@@ -535,20 +725,42 @@ def main():
         print(f"ERROR: Query study '{QUERY_STUDY}' not found!")
         return
 
-    # Extract reference and query
+    # Load query data
     print(f"\n{'='*60}")
-    print("EXTRACTING STUDY DATA")
+    print("LOADING QUERY DATA")
     print('='*60)
 
-    adata_ref = subset_study(adata, study_col, REFERENCE_STUDY, max_cells=MAX_CELLS)
-    print(f"Reference ({REFERENCE_STUDY}): {adata_ref.n_obs:,} cells")
+    X_query, obs_query, var_query = load_h5ad_data(
+        DATA_PATH,
+        study_col=study_col,
+        cell_type_col=cell_type_col,
+        study_name=QUERY_STUDY,
+        max_cells=MAX_CELLS,
+        use_raw=True
+    )
 
-    adata_query = subset_study(adata, study_col, QUERY_STUDY, max_cells=MAX_CELLS)
-    print(f"Query ({QUERY_STUDY}): {adata_query.n_obs:,} cells")
+    print(f"Query ({QUERY_STUDY}): {X_query.shape[0]:,} cells x {X_query.shape[1]:,} genes")
+
+    # Get gene names
+    if 'feature_name' in var_query.columns:
+        gene_names = var_query['feature_name'].values
+    elif var_query.index is not None and len(var_query.index) > 0:
+        gene_names = var_query.index.values
+    else:
+        # Try to find gene name column
+        for col in ['gene_name', 'gene_symbol', 'symbol', 'name']:
+            if col in var_query.columns:
+                gene_names = var_query[col].values
+                break
+        else:
+            gene_names = np.arange(X_query.shape[1]).astype(str)
+            print("  Warning: Could not find gene names, using indices")
+
+    print(f"Gene names source: {type(gene_names)}, first 3: {gene_names[:3]}")
 
     # Get ground truth labels
-    y_true = adata_query.obs[cell_type_col].values
-    print(f"\nGround truth labels: {len(np.unique(y_true[pd.notna(y_true)]))} unique types")
+    y_true = obs_query[cell_type_col].values
+    print(f"Ground truth labels: {len(np.unique(y_true[pd.notna(y_true)]))} unique types")
 
     # Initialize scTab model
     print(f"\n{'='*60}")
@@ -568,7 +780,7 @@ def main():
     print("RUNNING PREDICTION")
     print('='*60)
 
-    y_pred = sctab.predict(adata_query)
+    y_pred = sctab.predict_from_matrix(X_query, gene_names)
 
     elapsed = time.time() - start_time
     print(f"\nTotal inference time: {elapsed:.1f} seconds")
