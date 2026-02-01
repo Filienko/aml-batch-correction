@@ -537,11 +537,27 @@ class ScTabInference:
 
         print(f"  Input: {X.shape[0]} cells x {X.shape[1]} genes")
 
-        # Align genes to model's expected order
+        gene_names = np.asarray(gene_names)
+        model_genes = self.genes_from_model['feature_name'].values
+
+        # Step 1: Subset to genes that exist in model (as per scTab docs)
+        # This is required before calling cellnet's streamline_count_matrix
+        gene_mask = np.isin(gene_names, model_genes)
+
+        # Convert to csc_matrix for efficient column slicing
+        if not isinstance(X, csc_matrix):
+            X = csc_matrix(X)
+
+        X_subset = X[:, gene_mask]
+        gene_names_subset = gene_names[gene_mask]
+
+        print(f"  After subsetting to model genes: {X_subset.shape[1]} genes")
+
+        # Step 2: Align genes to model's expected order
         x_streamlined = streamline_count_matrix(
-            X,
-            gene_names,
-            self.genes_from_model['feature_name'].values
+            X_subset,
+            gene_names_subset,
+            model_genes
         )
 
         # Run inference in batches
