@@ -605,6 +605,11 @@ class ScTabInference:
             model_genes
         )
 
+        # Convert to dense numpy array if sparse
+        if hasattr(x_streamlined, 'toarray'):
+            x_streamlined = x_streamlined.toarray()
+        x_streamlined = np.asarray(x_streamlined, dtype=np.float32)
+
         # Run inference in batches
         n_cells = x_streamlined.shape[0]
         preds = []
