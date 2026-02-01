@@ -540,9 +540,54 @@ class ScTabInference:
         gene_names = np.asarray(gene_names)
         model_genes = self.genes_from_model['feature_name'].values
 
+        # Diagnostic: show gene name formats
+        print(f"  Input gene examples: {gene_names[:3]}")
+        print(f"  Model gene examples: {model_genes[:3]}")
+
         # Step 1: Subset to genes that exist in model (as per scTab docs)
-        # This is required before calling cellnet's streamline_count_matrix
+        # Try different matching strategies if direct match fails
         gene_mask = np.isin(gene_names, model_genes)
+        n_direct_match = gene_mask.sum()
+
+        if n_direct_match < 1000:
+            print(f"  Direct match found only {n_direct_match} genes, trying alternative matching...")
+
+            # Try case-insensitive matching
+            gene_names_lower = np.char.lower(gene_names.astype(str))
+            model_genes_lower = np.char.lower(model_genes.astype(str))
+            gene_mask_lower = np.isin(gene_names_lower, model_genes_lower)
+
+            if gene_mask_lower.sum() > n_direct_match:
+                print(f"  Case-insensitive match: {gene_mask_lower.sum()} genes")
+                # Build mapping for case-insensitive
+                model_gene_map = {g.lower(): g for g in model_genes}
+                gene_names_mapped = np.array([
+                    model_gene_map.get(g.lower(), g) for g in gene_names
+                ])
+                gene_mask = np.isin(gene_names_mapped, model_genes)
+                gene_names = gene_names_mapped
+
+            # Try stripping Ensembl version numbers (ENSG00000123456.1 -> ENSG00000123456)
+            if gene_mask.sum() < 1000 and any('.' in str(g) for g in gene_names[:100]):
+                gene_names_stripped = np.array([str(g).split('.')[0] for g in gene_names])
+                model_genes_stripped = np.array([str(g).split('.')[0] for g in model_genes])
+                gene_mask_stripped = np.isin(gene_names_stripped, model_genes_stripped)
+
+                if gene_mask_stripped.sum() > gene_mask.sum():
+                    print(f"  Version-stripped match: {gene_mask_stripped.sum()} genes")
+                    # Rebuild with stripped names
+                    model_gene_map = {str(g).split('.')[0]: g for g in model_genes}
+                    gene_names = np.array([
+                        model_gene_map.get(str(g).split('.')[0], g) for g in gene_names
+                    ])
+                    gene_mask = np.isin(gene_names, model_genes)
+
+        print(f"  Final gene overlap: {gene_mask.sum()}/{len(model_genes)} model genes found in data")
+
+        if gene_mask.sum() < 1000:
+            print("  WARNING: Very low gene overlap! Check gene naming conventions.")
+            print(f"  Input uses: {gene_names[:5]}")
+            print(f"  Model expects: {model_genes[:5]}")
 
         # Convert to csc_matrix for efficient column slicing
         if not isinstance(X, csc_matrix):
