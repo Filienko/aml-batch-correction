@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Standalone SingleR Evaluation Script
-=====================================
+Standalone SingleR Evaluation Script (Minimal Dependencies)
+============================================================
 Test SingleR reference-based cell type annotation on a single reference/query study pair.
 
 SingleR is a REFERENCE-BASED method - it compares query cells to labeled reference
 cells to assign cell types. This is different from scTab/ScType which are zero-shot.
+
+This version uses h5py to read h5ad files directly, avoiding scanpy/anndata
+dependency conflicts.
 
 Based on singler Python package (BiocPy):
 https://pypi.org/project/singler/
@@ -15,7 +18,7 @@ Usage:
     python test_singler_single_pair.py
 
 Requirements:
-    pip install singler celldex summarizedexperiment
+    pip install singler summarizedexperiment h5py numpy pandas scipy scikit-learn
 """
 
 import sys
@@ -23,10 +26,10 @@ import warnings
 import time
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
-import scanpy as sc
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, csc_matrix
 from sklearn.metrics import (
     accuracy_score,
     adjusted_rand_score,
@@ -55,6 +58,206 @@ MAX_REF_CELLS = 10000  # Reference can be larger
 # Output
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+# ==============================================================================
+# H5AD DATA LOADING (without scanpy/anndata)
+# ==============================================================================
+
+class H5ADReader:
+    """Minimal h5ad reader using h5py directly."""
+
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self._file = None
+
+    def __enter__(self):
+        self._file = h5py.File(self.filepath, 'r')
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._file:
+            self._file.close()
+
+    def get_obs(self):
+        """Read obs (cell metadata) as DataFrame."""
+        obs = self._file['obs']
+
+        if isinstance(obs, h5py.Dataset):
+            return pd.DataFrame(obs[()])
+        else:
+            data = {}
+            index = None
+
+            if '_index' in obs:
+                index = obs['_index'][()].astype(str)
+
+            for key in obs.keys():
+                if key.startswith('_') or key == '__categories':
+                    continue
+                try:
+                    col_data = obs[key]
+                    if isinstance(col_data, h5py.Group):
+                        if 'categories' in col_data and 'codes' in col_data:
+                            categories = col_data['categories'][()].astype(str)
+                            codes = col_data['codes'][()]
+                            data[key] = categories[codes]
+                    else:
+                        arr = col_data[()]
+                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
+                            arr = arr.astype(str)
+                        data[key] = arr
+                except Exception:
+                    continue
+
+            df = pd.DataFrame(data)
+            if index is not None and len(index) == len(df):
+                df.index = index
+            return df
+
+    def get_var(self, use_raw=True):
+        """Read var (gene metadata) as DataFrame."""
+        if use_raw and 'raw' in self._file and 'var' in self._file['raw']:
+            var = self._file['raw']['var']
+        else:
+            var = self._file['var']
+
+        if isinstance(var, h5py.Dataset):
+            return pd.DataFrame(var[()])
+        else:
+            data = {}
+            index = None
+
+            if '_index' in var:
+                index = var['_index'][()].astype(str)
+
+            for key in var.keys():
+                if key.startswith('_'):
+                    continue
+                try:
+                    col_data = var[key]
+                    if isinstance(col_data, h5py.Group):
+                        if 'categories' in col_data and 'codes' in col_data:
+                            categories = col_data['categories'][()].astype(str)
+                            codes = col_data['codes'][()]
+                            data[key] = categories[codes]
+                    else:
+                        arr = col_data[()]
+                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
+                            arr = arr.astype(str)
+                        data[key] = arr
+                except Exception:
+                    continue
+
+            df = pd.DataFrame(data)
+            if index is not None and len(index) == len(df):
+                df.index = index
+            return df
+
+    def get_X(self, use_raw=True, cell_indices=None):
+        """Read X matrix (optionally from raw)."""
+        if use_raw and 'raw' in self._file and 'X' in self._file['raw']:
+            X_group = self._file['raw']['X']
+        else:
+            X_group = self._file['X']
+
+        if isinstance(X_group, h5py.Group):
+            data = X_group['data'][()]
+            indices = X_group['indices'][()]
+            indptr = X_group['indptr'][()]
+
+            if 'shape' in X_group.attrs:
+                shape = tuple(X_group.attrs['shape'])
+            else:
+                n_rows = len(indptr) - 1
+                n_cols = indices.max() + 1 if len(indices) > 0 else 0
+                shape = (n_rows, n_cols)
+
+            X = csr_matrix((data, indices, indptr), shape=shape)
+
+            if cell_indices is not None:
+                X = X[cell_indices]
+
+            return X
+        else:
+            if cell_indices is not None:
+                return X_group[cell_indices]
+            return X_group[()]
+
+
+def load_h5ad_data(filepath, study_col, cell_type_col, study_name, max_cells=None, use_raw=True):
+    """Load data for a specific study from h5ad file."""
+    with H5ADReader(filepath) as reader:
+        print(f"  Reading obs...")
+        obs = reader.get_obs()
+
+        if study_col not in obs.columns:
+            raise ValueError(f"Study column '{study_col}' not found. Available: {obs.columns.tolist()}")
+
+        mask = obs[study_col] == study_name
+        indices = np.where(mask)[0]
+
+        if len(indices) == 0:
+            raise ValueError(f"No cells found for study '{study_name}'")
+
+        if max_cells and len(indices) > max_cells:
+            np.random.seed(42)
+            indices = np.random.choice(indices, max_cells, replace=False)
+            indices = np.sort(indices)
+
+        print(f"  Reading var...")
+        var = reader.get_var(use_raw=use_raw)
+
+        print(f"  Reading X matrix for {len(indices)} cells...")
+        X = reader.get_X(use_raw=use_raw, cell_indices=indices)
+
+        obs = obs.iloc[indices].reset_index(drop=True)
+
+        return X, obs, var
+
+
+def detect_columns(filepath):
+    """Auto-detect study and cell type columns from h5ad file."""
+    study_candidates = ['study', 'Study', 'dataset', 'batch', 'sample', 'Batch']
+    cell_type_candidates = ['cell_type', 'Cell Type', 'celltype', 'cell_label',
+                            'annotation', 'Annotation', 'CellType']
+
+    with H5ADReader(filepath) as reader:
+        obs = reader.get_obs()
+        columns = obs.columns.tolist()
+
+    study_col = next((c for c in study_candidates if c in columns), None)
+    cell_type_col = next((c for c in cell_type_candidates if c in columns), None)
+
+    return study_col, cell_type_col, columns
+
+
+def list_studies(filepath, study_col):
+    """List available studies in the h5ad file."""
+    with H5ADReader(filepath) as reader:
+        obs = reader.get_obs()
+        return obs[study_col].unique().tolist()
+
+
+# ==============================================================================
+# PREPROCESSING
+# ==============================================================================
+
+def log_normalize(X, target_sum=1e4):
+    """Log-normalize count matrix (like scanpy.pp.normalize_total + log1p)."""
+    if hasattr(X, 'toarray'):
+        X = X.toarray()
+    X = np.asarray(X, dtype=np.float64)
+
+    # Normalize to target sum
+    row_sums = X.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # Avoid division by zero
+    X_norm = X / row_sums * target_sum
+
+    # Log transform
+    X_log = np.log1p(X_norm)
+
+    return X_log
 
 
 # ==============================================================================
@@ -91,15 +294,12 @@ def run_singler(
     -------
     predictions : np.ndarray
         Predicted cell types for query cells
-    scores : pd.DataFrame
-        Score matrix (optional)
     """
     try:
         import singler
-        from summarizedexperiment import SummarizedExperiment
     except ImportError:
         raise ImportError(
-            "singler package not found. Install with: pip install singler summarizedexperiment"
+            "singler package not found. Install with: pip install singler"
         )
 
     print("  Using singler package")
@@ -110,19 +310,20 @@ def run_singler(
     if hasattr(ref_matrix, 'toarray'):
         ref_matrix = ref_matrix.toarray()
 
-    # Ensure numpy arrays
+    # Ensure numpy arrays with correct dtype
     query_matrix = np.asarray(query_matrix, dtype=np.float64)
     ref_matrix = np.asarray(ref_matrix, dtype=np.float64)
     query_genes = np.asarray(query_genes)
     ref_genes = np.asarray(ref_genes)
     ref_labels = np.asarray(ref_labels)
 
-    # SingleR expects genes x cells (transposed from AnnData format)
+    # SingleR expects genes x cells (transposed from standard format)
     query_matrix_T = query_matrix.T
     ref_matrix_T = ref_matrix.T
 
     print(f"  Query: {query_matrix_T.shape[1]} cells x {query_matrix_T.shape[0]} genes")
     print(f"  Reference: {ref_matrix_T.shape[1]} cells x {ref_matrix_T.shape[0]} genes")
+    print(f"  Reference labels: {len(np.unique(ref_labels))} unique types")
 
     # Run SingleR
     print("  Running SingleR annotation...")
@@ -136,67 +337,6 @@ def run_singler(
     )
 
     # Extract predictions
-    predictions = results.column("best")
-
-    # Convert to numpy array
-    predictions = np.asarray(predictions)
-
-    return predictions, results
-
-
-def run_singler_with_builtin_ref(query_matrix, query_genes, ref_name="BlueprintEncodeData"):
-    """
-    Run SingleR with built-in celldex reference.
-
-    Parameters
-    ----------
-    query_matrix : array-like
-        Query expression matrix (cells x genes), log-normalized
-    query_genes : array-like
-        Gene names for query
-    ref_name : str
-        Name of celldex reference to use
-
-    Returns
-    -------
-    predictions : np.ndarray
-        Predicted cell types
-    """
-    try:
-        import singler
-        import celldex
-    except ImportError:
-        raise ImportError(
-            "singler/celldex not found. Install with: pip install singler celldex"
-        )
-
-    print(f"  Using built-in reference: {ref_name}")
-
-    # Load reference
-    ref_data = getattr(celldex, ref_name)()
-    print(f"  Reference loaded: {ref_data.shape}")
-
-    # Convert query to correct format
-    if hasattr(query_matrix, 'toarray'):
-        query_matrix = query_matrix.toarray()
-
-    query_matrix = np.asarray(query_matrix, dtype=np.float64)
-    query_genes = np.asarray(query_genes)
-
-    # Transpose for singler (genes x cells)
-    query_matrix_T = query_matrix.T
-
-    # Get reference labels
-    ref_labels = ref_data.get_column_data().column("label.main")
-
-    # Run annotation
-    results = singler.annotate_single(
-        test_data=query_matrix_T,
-        test_features=query_genes,
-        ref_data=ref_data,
-        ref_labels=ref_labels,
-    )
-
     predictions = np.asarray(results.column("best"))
 
     return predictions, results
@@ -300,95 +440,123 @@ def main():
 
     np.random.seed(42)
 
-    # Load data
+    # Detect columns
     print(f"\n{'='*60}")
-    print("LOADING DATA")
+    print("DETECTING DATA STRUCTURE")
     print('='*60)
 
-    adata = sc.read_h5ad(DATA_PATH)
-    print(f"Loaded atlas: {adata.n_obs:,} cells x {adata.n_vars:,} genes")
-
-    # Detect columns
-    study_col = 'study' if 'study' in adata.obs.columns else 'Study'
-    cell_type_candidates = ['cell_type', 'Cell Type', 'celltype', 'cell_label', 'annotation']
-    cell_type_col = next((c for c in cell_type_candidates if c in adata.obs.columns), None)
-
+    study_col, cell_type_col, all_columns = detect_columns(DATA_PATH)
     print(f"Study column:     {study_col}")
     print(f"Cell type column: {cell_type_col}")
 
-    # Extract reference study
+    if study_col is None or cell_type_col is None:
+        print("ERROR: Could not detect required columns!")
+        return
+
+    # List available studies
+    available_studies = list_studies(DATA_PATH, study_col)
+    print(f"\nAvailable studies: {available_studies}")
+
+    if REFERENCE_STUDY not in available_studies:
+        print(f"ERROR: Reference study '{REFERENCE_STUDY}' not found!")
+        return
+    if QUERY_STUDY not in available_studies:
+        print(f"ERROR: Query study '{QUERY_STUDY}' not found!")
+        return
+
+    # Load reference data
     print(f"\n{'='*60}")
-    print("EXTRACTING REFERENCE DATA")
+    print("LOADING REFERENCE DATA")
     print('='*60)
 
-    ref_mask = adata.obs[study_col] == REFERENCE_STUDY
-    adata_ref = adata[ref_mask].copy()
+    X_ref, obs_ref, var_ref = load_h5ad_data(
+        DATA_PATH,
+        study_col=study_col,
+        cell_type_col=cell_type_col,
+        study_name=REFERENCE_STUDY,
+        max_cells=MAX_REF_CELLS,
+        use_raw=True
+    )
 
-    if MAX_REF_CELLS and adata_ref.n_obs > MAX_REF_CELLS:
-        indices = np.random.choice(adata_ref.n_obs, MAX_REF_CELLS, replace=False)
-        adata_ref = adata_ref[indices].copy()
+    print(f"Reference ({REFERENCE_STUDY}): {X_ref.shape[0]:,} cells x {X_ref.shape[1]:,} genes")
 
-    print(f"Reference ({REFERENCE_STUDY}): {adata_ref.n_obs:,} cells")
-
-    ref_labels = adata_ref.obs[cell_type_col].values
+    ref_labels = obs_ref[cell_type_col].values
     print(f"Reference labels: {len(np.unique(ref_labels[pd.notna(ref_labels)]))} unique types")
 
-    # Extract query study
+    # Load query data
     print(f"\n{'='*60}")
-    print("EXTRACTING QUERY DATA")
+    print("LOADING QUERY DATA")
     print('='*60)
 
-    query_mask = adata.obs[study_col] == QUERY_STUDY
-    adata_query = adata[query_mask].copy()
+    X_query, obs_query, var_query = load_h5ad_data(
+        DATA_PATH,
+        study_col=study_col,
+        cell_type_col=cell_type_col,
+        study_name=QUERY_STUDY,
+        max_cells=MAX_CELLS,
+        use_raw=True
+    )
 
-    if MAX_CELLS and adata_query.n_obs > MAX_CELLS:
-        indices = np.random.choice(adata_query.n_obs, MAX_CELLS, replace=False)
-        adata_query = adata_query[indices].copy()
+    print(f"Query ({QUERY_STUDY}): {X_query.shape[0]:,} cells x {X_query.shape[1]:,} genes")
 
-    print(f"Query ({QUERY_STUDY}): {adata_query.n_obs:,} cells")
-
-    y_true = adata_query.obs[cell_type_col].values
+    y_true = obs_query[cell_type_col].values
     print(f"Ground truth labels: {len(np.unique(y_true[pd.notna(y_true)]))} unique types")
 
-    # Preprocess - SingleR needs log-normalized data
+    # Get gene names
+    if 'feature_name' in var_ref.columns:
+        ref_genes = var_ref['feature_name'].values
+    elif var_ref.index is not None:
+        ref_genes = var_ref.index.values
+    else:
+        ref_genes = np.arange(X_ref.shape[1]).astype(str)
+
+    if 'feature_name' in var_query.columns:
+        query_genes = var_query['feature_name'].values
+    elif var_query.index is not None:
+        query_genes = var_query.index.values
+    else:
+        query_genes = np.arange(X_query.shape[1]).astype(str)
+
+    # Find common genes
     print(f"\n{'='*60}")
     print("PREPROCESSING")
     print('='*60)
 
-    # Process reference
-    if adata_ref.raw is not None:
-        adata_ref_proc = adata_ref.raw.to_adata()
-    else:
-        adata_ref_proc = adata_ref.copy()
-
-    sc.pp.normalize_total(adata_ref_proc, target_sum=1e4)
-    sc.pp.log1p(adata_ref_proc)
-
-    # Process query
-    if adata_query.raw is not None:
-        adata_query_proc = adata_query.raw.to_adata()
-    else:
-        adata_query_proc = adata_query.copy()
-
-    sc.pp.normalize_total(adata_query_proc, target_sum=1e4)
-    sc.pp.log1p(adata_query_proc)
+    ref_genes = np.asarray(ref_genes)
+    query_genes = np.asarray(query_genes)
 
     # Find common genes
-    common_genes = adata_ref_proc.var_names.intersection(adata_query_proc.var_names)
+    common_genes = np.intersect1d(ref_genes, query_genes)
     print(f"Common genes: {len(common_genes)}")
 
-    adata_ref_proc = adata_ref_proc[:, common_genes]
-    adata_query_proc = adata_query_proc[:, common_genes]
+    # Subset to common genes
+    ref_gene_mask = np.isin(ref_genes, common_genes)
+    query_gene_mask = np.isin(query_genes, common_genes)
 
-    # Get gene names
-    if 'feature_name' in adata_ref_proc.var.columns:
-        ref_genes = adata_ref_proc.var['feature_name'].values
-        query_genes = adata_query_proc.var['feature_name'].values
-    else:
-        ref_genes = adata_ref_proc.var_names.values
-        query_genes = adata_query_proc.var_names.values
+    X_ref_common = X_ref[:, ref_gene_mask]
+    X_query_common = X_query[:, query_gene_mask]
+    ref_genes_common = ref_genes[ref_gene_mask]
+    query_genes_common = query_genes[query_gene_mask]
 
-    print(f"Gene name examples: {ref_genes[:3]}")
+    # Ensure same gene order
+    ref_gene_order = {g: i for i, g in enumerate(ref_genes_common)}
+    query_reorder = [ref_gene_order[g] for g in query_genes_common if g in ref_gene_order]
+
+    # Log-normalize
+    print("  Log-normalizing reference...")
+    X_ref_norm = log_normalize(X_ref_common)
+
+    print("  Log-normalizing query...")
+    X_query_norm = log_normalize(X_query_common)
+
+    print(f"  Reference: {X_ref_norm.shape}")
+    print(f"  Query: {X_query_norm.shape}")
+
+    # Remove cells with missing labels from reference
+    valid_ref_mask = pd.notna(ref_labels)
+    X_ref_norm = X_ref_norm[valid_ref_mask]
+    ref_labels_valid = ref_labels[valid_ref_mask]
+    print(f"  Reference after removing NaN labels: {X_ref_norm.shape[0]} cells")
 
     # Run SingleR
     print(f"\n{'='*60}")
@@ -397,41 +565,13 @@ def main():
 
     start_time = time.time()
 
-    # Get expression matrices
-    ref_matrix = adata_ref_proc.X
-    query_matrix = adata_query_proc.X
-
-    try:
-        y_pred, results = run_singler(
-            query_matrix=query_matrix,
-            query_genes=query_genes,
-            ref_matrix=ref_matrix,
-            ref_genes=ref_genes,
-            ref_labels=ref_labels,
-        )
-    except Exception as e:
-        print(f"  SingleR failed: {e}")
-        print("  Trying alternative: KNN-based label transfer...")
-
-        # Fallback to simple KNN
-        from sklearn.neighbors import KNeighborsClassifier
-
-        if hasattr(ref_matrix, 'toarray'):
-            ref_matrix = ref_matrix.toarray()
-        if hasattr(query_matrix, 'toarray'):
-            query_matrix = query_matrix.toarray()
-
-        # Remove cells with missing labels from reference
-        valid_ref = pd.notna(ref_labels)
-        ref_matrix_valid = ref_matrix[valid_ref]
-        ref_labels_valid = ref_labels[valid_ref]
-
-        print(f"  Training KNN on {ref_matrix_valid.shape[0]} reference cells...")
-        knn = KNeighborsClassifier(n_neighbors=15, n_jobs=-1)
-        knn.fit(ref_matrix_valid, ref_labels_valid)
-
-        print(f"  Predicting on {query_matrix.shape[0]} query cells...")
-        y_pred = knn.predict(query_matrix)
+    y_pred, results = run_singler(
+        query_matrix=X_query_norm,
+        query_genes=ref_genes_common,  # Use same gene names
+        ref_matrix=X_ref_norm,
+        ref_genes=ref_genes_common,
+        ref_labels=ref_labels_valid,
+    )
 
     elapsed = time.time() - start_time
     print(f"\nTotal inference time: {elapsed:.1f} seconds")
@@ -458,7 +598,7 @@ def main():
     print('='*80)
     print(f"""
 SingleR Evaluation Results:
-  Reference:     {REFERENCE_STUDY} ({adata_ref.n_obs:,} cells)
+  Reference:     {REFERENCE_STUDY} ({X_ref_norm.shape[0]:,} cells)
   Query Study:   {QUERY_STUDY}
   Cells:         {metrics['n_cells']:,}
 
