@@ -74,12 +74,34 @@ DATA_PATH = Path("/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas
 SCTAB_CHECKPOINT = Path("scTab-checkpoints/scTab/run5/val_f1_macro_epoch=41_val_f1_macro=0.847.ckpt")
 MERLIN_DIR = Path("merlin_cxg_2023_05_15_sf-log1p_minimal")
 
-# Study configuration
-REFERENCE_STUDY = 'van_galen_2019'
-QUERY_STUDY = 'zhang_2023'
+# Multi-scenario configuration (same as SingleR for fair comparison)
+# Note: scTab is a zero-shot model, so reference is not used during inference.
+# We include reference info to match the evaluation protocol of reference-based methods.
+SCENARIOS = [
+    {
+        'name': 'Same-Platform: Beneyto (10X) -> Zhang (10X)',
+        'reference': 'beneyto-calabuig-2023',
+        'query': 'zhang_2023',
+    },
+    {
+        'name': 'Cross-Platform: Zhai (SORT-seq) -> Zhang (10X)',
+        'reference': 'zhai_2022',
+        'query': 'zhang_2023',
+    },
+    {
+        'name': 'Cross-Platform: Van Galen (Seq-Well) -> Velten (Muta-Seq)',
+        'reference': 'van_galen_2019',
+        'query': 'velten_2021',
+    },
+    {
+        'name': 'Cross-Platform: Van Galen (Seq-Well) -> Beneyto (10X)',
+        'reference': 'van_galen_2019',
+        'query': 'beneyto-calabuig-2023',
+    },
+]
 
-# Subsampling for quick testing
-MAX_CELLS = 5000
+# Subsampling for computational efficiency
+MAX_CELLS = 10000
 BATCH_SIZE = 2048
 
 # Output
@@ -858,70 +880,47 @@ def label_overlap_analysis(y_true, y_pred):
 
 
 # ==============================================================================
-# MAIN
+# SCENARIO EVALUATION
 # ==============================================================================
 
-def main():
-    """Run scTab evaluation on a single reference/query pair."""
+def run_evaluation_scenario(scenario, sctab, study_col, cell_type_col):
+    """
+    Run scTab evaluation for a single scenario.
 
-    print("="*80)
-    print("scTab Single-Pair Evaluation (Minimal Dependencies)")
-    print("="*80)
-    print(f"\nConfiguration:")
-    print(f"  Data:       {DATA_PATH}")
-    print(f"  Checkpoint: {SCTAB_CHECKPOINT}")
-    print(f"  Merlin dir: {MERLIN_DIR}")
-    print(f"  Reference:  {REFERENCE_STUDY}")
-    print(f"  Query:      {QUERY_STUDY}")
-    print(f"  Max cells:  {MAX_CELLS}")
+    Note: scTab is a zero-shot model, so reference data is not used.
+    We include reference info for protocol consistency with reference-based methods.
 
-    # Set random seed for reproducibility
-    np.random.seed(42)
+    Parameters
+    ----------
+    scenario : dict
+        Scenario configuration with 'name', 'reference', 'query' keys
+    sctab : ScTabInference
+        Initialized scTab model
+    study_col : str
+        Column name for study/batch
+    cell_type_col : str
+        Column name for cell type labels
 
-    # Detect columns
-    print(f"\n{'='*60}")
-    print("DETECTING DATA STRUCTURE")
-    print('='*60)
+    Returns
+    -------
+    metrics : dict
+        Evaluation metrics for this scenario
+    """
+    print(f"\n>>> SCENARIO: {scenario['name']}")
 
-    study_col, cell_type_col, all_columns = detect_columns(DATA_PATH)
-    print(f"Available columns: {all_columns[:10]}..." if len(all_columns) > 10 else f"Available columns: {all_columns}")
-    print(f"Study column:     {study_col}")
-    print(f"Cell type column: {cell_type_col}")
-
-    if study_col is None:
-        print("ERROR: Could not detect study column!")
-        return
-    if cell_type_col is None:
-        print("ERROR: Could not detect cell type column!")
-        return
-
-    # List available studies
-    available_studies = list_studies(DATA_PATH, study_col)
-    print(f"\nAvailable studies: {available_studies}")
-
-    # Check studies exist
-    if REFERENCE_STUDY not in available_studies:
-        print(f"ERROR: Reference study '{REFERENCE_STUDY}' not found!")
-        return
-    if QUERY_STUDY not in available_studies:
-        print(f"ERROR: Query study '{QUERY_STUDY}' not found!")
-        return
+    query_study = scenario['query']
 
     # Load query data
-    print(f"\n{'='*60}")
-    print("LOADING QUERY DATA")
-    print('='*60)
-
     X_query, obs_query, var_query = load_h5ad_data(
         DATA_PATH,
         study_col=study_col,
         cell_type_col=cell_type_col,
-        study_name=QUERY_STUDY,
+        study_name=query_study,
         max_cells=MAX_CELLS,
         use_raw=True
     )
 
-    print(f"Query ({QUERY_STUDY}): {X_query.shape[0]:,} cells x {X_query.shape[1]:,} genes")
+    print(f"  Query ({query_study}): {X_query.shape[0]:,} cells x {X_query.shape[1]:,} genes")
 
     # Get gene names
     if 'feature_name' in var_query.columns:
@@ -929,27 +928,80 @@ def main():
     elif var_query.index is not None and len(var_query.index) > 0:
         gene_names = var_query.index.values
     else:
-        # Try to find gene name column
         for col in ['gene_name', 'gene_symbol', 'symbol', 'name']:
             if col in var_query.columns:
                 gene_names = var_query[col].values
                 break
         else:
             gene_names = np.arange(X_query.shape[1]).astype(str)
-            print("  Warning: Could not find gene names, using indices")
-
-    print(f"Gene names source: {type(gene_names)}, first 3: {gene_names[:3]}")
 
     # Get ground truth labels
     y_true = obs_query[cell_type_col].values
-    print(f"Ground truth labels: {len(np.unique(y_true[pd.notna(y_true)]))} unique types")
 
-    # Initialize scTab model
-    print(f"\n{'='*60}")
-    print("INITIALIZING SCTAB")
-    print('='*60)
-
+    # Run prediction
     start_time = time.time()
+    y_pred_raw = sctab.predict_from_matrix(X_query, gene_names)
+    duration = time.time() - start_time
+
+    # Harmonize labels
+    y_pred = harmonize_labels(y_pred_raw, ground_truth_labels=y_true)
+
+    # Compute metrics
+    valid_mask = pd.notna(y_true)
+    y_t = y_true[valid_mask]
+    y_p = y_pred[valid_mask]
+
+    metrics = {
+        'Scenario': scenario['name'],
+        'Reference': scenario['reference'],
+        'Query': scenario['query'],
+        'Accuracy': accuracy_score(y_t, y_p),
+        'F1_Macro': f1_score(y_t, y_p, average='macro', zero_division=0),
+        'ARI': adjusted_rand_score(y_t, y_p),
+        'NMI': normalized_mutual_info_score(y_t, y_p),
+        'Time_Sec': duration,
+        'N_Cells': len(y_t),
+    }
+
+    print(f"  Done. Accuracy: {metrics['Accuracy']:.4f} | F1: {metrics['F1_Macro']:.4f} | Time: {duration:.1f}s")
+
+    return metrics
+
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
+def main():
+    """Run scTab multi-scenario evaluation."""
+
+    print("="*80)
+    print("scTab Multi-Scenario Evaluation")
+    print("="*80)
+    print(f"\nConfiguration:")
+    print(f"  Data:       {DATA_PATH}")
+    print(f"  Checkpoint: {SCTAB_CHECKPOINT}")
+    print(f"  Merlin dir: {MERLIN_DIR}")
+    print(f"  Max cells:  {MAX_CELLS}")
+    print(f"  Scenarios:  {len(SCENARIOS)}")
+
+    # Set random seed for reproducibility
+    np.random.seed(42)
+
+    # Detect columns
+    study_col, cell_type_col, _ = detect_columns(DATA_PATH)
+    print(f"\nDetected columns:")
+    print(f"  Study column:     {study_col}")
+    print(f"  Cell type column: {cell_type_col}")
+
+    if study_col is None or cell_type_col is None:
+        print("ERROR: Could not detect required columns!")
+        return
+
+    # Initialize scTab model (once, reuse for all scenarios)
+    print(f"\n{'='*60}")
+    print("INITIALIZING SCTAB MODEL")
+    print('='*60)
 
     sctab = ScTabInference(
         checkpoint_path=SCTAB_CHECKPOINT,
@@ -957,69 +1009,32 @@ def main():
         batch_size=BATCH_SIZE
     )
 
-    # Run prediction
-    print(f"\n{'='*60}")
-    print("RUNNING PREDICTION")
-    print('='*60)
+    # Run all scenarios
+    all_results = []
 
-    y_pred_raw = sctab.predict_from_matrix(X_query, gene_names)
+    for scenario in SCENARIOS:
+        try:
+            metrics = run_evaluation_scenario(scenario, sctab, study_col, cell_type_col)
+            all_results.append(metrics)
+        except Exception as e:
+            print(f"  Failed scenario {scenario['name']}: {e}")
+            import traceback
+            traceback.print_exc()
 
-    elapsed = time.time() - start_time
-    print(f"\nTotal inference time: {elapsed:.1f} seconds")
+    # Summary table
+    print("\n" + "="*80)
+    print("FINAL COMPARISON")
+    print("="*80)
 
-    # Harmonize labels (scTab uses Cell Ontology, dataset may use abbreviations)
-    print(f"\n{'='*60}")
-    print("LABEL HARMONIZATION")
-    print('='*60)
-    print("scTab uses Cell Ontology labels, harmonizing to match ground truth...")
-
-    y_pred = harmonize_labels(y_pred_raw, ground_truth_labels=y_true)
-
-    # Show mapping results
-    n_mapped = np.sum(y_pred != y_pred_raw)
-    print(f"  Mapped {n_mapped}/{len(y_pred)} predictions to ground truth vocabulary")
-
-    # Evaluate with harmonized labels
-    print("\n--- Evaluation with HARMONIZED labels ---")
-    metrics = evaluate_predictions(y_true, y_pred, method_name="scTab (harmonized)")
-    metrics['time_seconds'] = elapsed
-    metrics['reference_study'] = REFERENCE_STUDY
-    metrics['query_study'] = QUERY_STUDY
-
-    # Also show raw (unharmonized) metrics for comparison
-    print("\n--- Evaluation with RAW labels (for reference) ---")
-    metrics_raw = evaluate_predictions(y_true, y_pred_raw, method_name="scTab (raw)")
-
-    # Label overlap analysis (harmonized)
-    print("\n--- Label overlap (harmonized) ---")
-    label_overlap_analysis(y_true, y_pred)
+    summary_df = pd.DataFrame(all_results)
+    print(summary_df.to_string(index=False))
 
     # Save results
-    results_df = pd.DataFrame([metrics])
-    output_path = OUTPUT_DIR / f"sctab_eval_{QUERY_STUDY}.csv"
-    results_df.to_csv(output_path, index=False)
+    output_path = OUTPUT_DIR / "sctab_multi_scenario_results.csv"
+    summary_df.to_csv(output_path, index=False)
     print(f"\nResults saved to: {output_path}")
 
-    # Summary
-    print(f"\n{'='*80}")
-    print("SUMMARY")
-    print('='*80)
-    print(f"""
-scTab Evaluation Results:
-  Query Study:   {QUERY_STUDY}
-  Cells:         {metrics['n_cells']:,}
-
-  Accuracy:      {metrics['accuracy']:.4f}
-  ARI:           {metrics['ari']:.4f}
-  NMI:           {metrics['nmi']:.4f}
-  F1 (macro):    {metrics['f1_macro']:.4f}
-  F1 (weighted): {metrics['f1_weighted']:.4f}
-
-  Time:          {elapsed:.1f}s
-""")
-    print('='*80)
-
-    return metrics
+    return summary_df
 
 
 if __name__ == "__main__":
