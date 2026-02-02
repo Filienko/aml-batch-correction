@@ -63,10 +63,15 @@ SCENARIOS = [
 #        'reference': 'van_galen_2019',
 #        'query': 'velten_2021',
 #    },
+#    {
+#        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
+#        'reference': 'van_galen_2019',
+#        'query': 'beneyto-calabuig-2023',
+#    },
     {
-        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
+        'name': 'Cross-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
         'reference': 'van_galen_2019',
-        'query': 'beneyto-calabuig-2023',
+        'query': 'zhai_2022',
     },
 ]
 
