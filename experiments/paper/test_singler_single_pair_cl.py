@@ -71,6 +71,11 @@ SCENARIOS = [
         'reference': 'van_galen_2019',
         'query': 'beneyto-calabuig-2023',
     },
+    {
+        'name': 'Same-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
+        'reference': 'van_galen_2019',
+        'query': 'zhai_2022',
+    },
 ]
 
 SCENARIOS = [
@@ -78,6 +83,11 @@ SCENARIOS = [
         'name': 'Same-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
         'reference': 'van_galen_2019',
         'query': 'zhai_2022',
+    },
+    {
+        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
+        'reference': 'van_galen_2019',
+        'query': 'beneyto-calabuig-2023',
     },
 ]
 # Subsampling for quick testing

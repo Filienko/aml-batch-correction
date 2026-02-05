@@ -54,7 +54,7 @@ MERLIN_DIR = Path("merlin_cxg_2023_05_15_sf-log1p_minimal")
 # Set to None to use full data
 MAX_CELLS_PER_STUDY = 15000
 
-SCENARIOS = [
+SCENARIOS_SHORT = [
     {
         'name': 'Cross-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
         'reference': 'van_galen_2019',
@@ -62,6 +62,33 @@ SCENARIOS = [
     },
 ]
 
+SCENARIOS = [
+    {
+        'name': 'Same-Platform: beneyto (10X Genomics) → Zhang (10X Genomics)',
+        'reference': 'beneyto-calabuig-2023',
+        'query': 'zhang_2023',
+    },
+    {
+        'name': 'Cross-Platform: Zhai (SORT-seq) → Zhang (10X Genomics)',
+        'reference': 'zhai_2022',
+        'query': 'zhang_2023',
+    },
+    {
+        'name': 'Cross-Platform: van_galen (Seq-Well) → velten (Muta-Seq)',
+        'reference': 'van_galen_2019',
+        'query': 'velten_2021',
+    },
+    {
+        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
+        'reference': 'van_galen_2019',
+        'query': 'beneyto-calabuig-2023',
+    },
+    {
+        'name': 'Same-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
+        'reference': 'van_galen_2019',
+        'query': 'zhai_2022',
+    },
+]
 # Which methods to run (set to False to skip)
 RUN_CELLTYPIST = True
 RUN_SCIMILARITY = True
