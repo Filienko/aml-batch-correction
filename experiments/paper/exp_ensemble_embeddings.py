@@ -273,6 +273,7 @@ def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
 def plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=None):
     """
     Create box-whisker plot comparing methods across datasets.
+    Style: horizontal boxes, one color per method, one plot per dataset.
 
     Parameters
     ----------
@@ -283,45 +284,105 @@ def plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=Non
     output_dir : Path
         Output directory for figures
     """
-    fig, ax = plt.subplots(figsize=(14, 6))
+    from matplotlib.patches import Patch
 
-    # Get unique scenarios and methods
-    scenarios = df_results['scenario'].unique()
-    methods = df_results['method'].unique()
-
-    # Filter to main methods only (not individual SCimilarity classifiers)
+    # Filter to main methods only
     main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
     df_plot = df_results[df_results['method'].isin(main_methods)].copy()
 
     if len(df_plot) == 0:
         print(f"    No data for main methods, using all methods")
         df_plot = df_results.copy()
-        main_methods = methods
+        main_methods = df_results['method'].unique().tolist()
 
-    # Create box plot
-    sns.boxplot(data=df_plot, x='scenario', y=metric, hue='method', ax=ax)
+    scenarios = df_plot['scenario'].unique()
 
-    # Formatting
-    metric_label = 'F1 Score (Macro)' if metric == 'f1_macro' else 'Runtime (seconds)'
-    ax.set_xlabel('Dataset/Scenario', fontsize=12)
-    ax.set_ylabel(metric_label, fontsize=12)
-    ax.set_title(f'Method Comparison: {metric_label}', fontsize=14)
+    # Create one plot per scenario
+    for scenario in scenarios:
+        df_scenario = df_plot[df_plot['scenario'] == scenario].copy()
 
-    # Rotate x-axis labels
-    plt.xticks(rotation=45, ha='right')
+        # Get methods present in this scenario, sorted by median metric (ascending)
+        method_medians = df_scenario.groupby('method')[metric].median().sort_values(ascending=True)
+        method_order = method_medians.index.tolist()
 
-    # Move legend outside
-    ax.legend(title='Method', bbox_to_anchor=(1.02, 1), loc='upper left')
+        # Create figure
+        n_methods = len(method_order)
+        fig_height = max(4, n_methods * 0.8)
+        fig, ax = plt.subplots(figsize=(8, fig_height))
 
-    plt.tight_layout()
+        # Color palette - distinct color per method
+        colors = sns.color_palette("husl", n_methods)
+        color_dict = {m: colors[i] for i, m in enumerate(method_order)}
 
-    if output_dir:
-        filename = output_dir / f"boxplot_methods_{metric}.png"
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"    Saved boxplot to {filename}")
-    else:
-        plt.show()
+        # Prepare data for boxplot
+        box_data = [df_scenario[df_scenario['method'] == m][metric].values
+                    for m in method_order]
+
+        # Create horizontal box plot
+        bp = ax.boxplot(
+            box_data,
+            vert=False,
+            patch_artist=True,
+            labels=method_order,
+            widths=0.6,
+        )
+
+        # Color each box
+        for patch, method in zip(bp['boxes'], method_order):
+            patch.set_facecolor(color_dict[method])
+            patch.set_alpha(0.85)
+            patch.set_edgecolor('black')
+            patch.set_linewidth(1)
+
+        # Style whiskers, caps, medians
+        for whisker in bp['whiskers']:
+            whisker.set(color='black', linewidth=1)
+        for cap in bp['caps']:
+            cap.set(color='black', linewidth=1)
+        for median in bp['medians']:
+            median.set(color='black', linewidth=1.5)
+        for flier in bp['fliers']:
+            flier.set(marker='o', markerfacecolor='gray', markersize=4, alpha=0.5)
+
+        # Formatting
+        if metric == 'f1_macro':
+            ax.set_xlabel('F1 Score (Macro)', fontsize=12, fontweight='bold')
+            ax.set_xlim(0, 1.05)
+        else:
+            ax.set_xlabel('Runtime (seconds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('')
+
+        # Add gridlines
+        ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
+        ax.set_axisbelow(True)
+
+        # Extract short scenario name for title
+        short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+        short_name = short_name.replace('→', '→\n').replace('->', '→\n')
+        ax.set_title(f'{short_name}', fontsize=14, fontweight='bold', pad=10)
+
+        # Create legend
+        legend_patches = [Patch(facecolor=color_dict[m], label=m, alpha=0.85,
+                                edgecolor='black', linewidth=0.5)
+                         for m in reversed(method_order)]
+        ax.legend(handles=legend_patches, title='Method',
+                 bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=10,
+                 title_fontsize=11, frameon=True)
+
+        # Remove top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+
+        if output_dir:
+            safe_scenario = scenario.replace(':', '').replace(' ', '_').replace('→', 'to').replace('->', 'to')[:40]
+            filename = output_dir / f"methods_{metric}_{safe_scenario}.png"
+            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"    Saved method comparison: {filename.name}")
+        else:
+            plt.show()
 
 
 def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
