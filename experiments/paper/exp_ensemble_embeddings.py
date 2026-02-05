@@ -326,7 +326,8 @@ def plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=Non
 
 def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
     """
-    Create box-whisker plot showing F1 per cell type for a specific method.
+    Create box-whisker plot showing F1/Accuracy per cell type for a specific method.
+    Style: horizontal boxes, one color per cell type, one plot per dataset.
 
     Parameters
     ----------
@@ -337,31 +338,94 @@ def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
     output_dir : Path
         Output directory for figures
     """
-    fig, ax = plt.subplots(figsize=(14, 8))
+    from matplotlib.patches import Patch
 
-    # Create box plot
-    sns.boxplot(data=df_per_celltype, x='cell_type', y='f1', hue='scenario', ax=ax)
+    # Create one plot per scenario (dataset)
+    scenarios = df_per_celltype['scenario'].unique()
 
-    ax.set_xlabel('Cell Type', fontsize=12)
-    ax.set_ylabel('F1 Score', fontsize=12)
-    ax.set_title(f'{method_name}: Per-Cell-Type F1 Scores', fontsize=14)
+    for scenario in scenarios:
+        df_scenario = df_per_celltype[df_per_celltype['scenario'] == scenario].copy()
 
-    # Rotate x-axis labels
-    plt.xticks(rotation=45, ha='right')
+        # Get unique cell types and sort by median F1 (ascending so highest is at top)
+        cell_type_medians = df_scenario.groupby('cell_type')['f1'].median().sort_values(ascending=True)
+        cell_type_order = cell_type_medians.index.tolist()
 
-    # Move legend outside
-    ax.legend(title='Dataset', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
+        # Create figure - height based on number of cell types
+        n_celltypes = len(cell_type_order)
+        fig_height = max(5, n_celltypes * 0.45)
+        fig, ax = plt.subplots(figsize=(8, fig_height))
 
-    plt.tight_layout()
+        # Color palette - distinct color per cell type
+        colors = sns.color_palette("husl", n_celltypes)
+        color_dict = {ct: colors[i] for i, ct in enumerate(cell_type_order)}
 
-    if output_dir:
-        safe_method = method_name.replace('-', '_')
-        filename = output_dir / f"boxplot_percelltype_{safe_method}.png"
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"    Saved per-celltype boxplot to {filename}")
-    else:
-        plt.show()
+        # Prepare data for boxplot
+        box_data = [df_scenario[df_scenario['cell_type'] == ct]['f1'].values
+                    for ct in cell_type_order]
+
+        # Create horizontal box plot
+        bp = ax.boxplot(
+            box_data,
+            vert=False,
+            patch_artist=True,
+            labels=cell_type_order,
+            widths=0.6,
+        )
+
+        # Color each box with its cell type color
+        for patch, ct in zip(bp['boxes'], cell_type_order):
+            patch.set_facecolor(color_dict[ct])
+            patch.set_alpha(0.85)
+            patch.set_edgecolor('black')
+            patch.set_linewidth(1)
+
+        # Style whiskers, caps, medians
+        for whisker in bp['whiskers']:
+            whisker.set(color='black', linewidth=1)
+        for cap in bp['caps']:
+            cap.set(color='black', linewidth=1)
+        for median in bp['medians']:
+            median.set(color='black', linewidth=1.5)
+        for flier in bp['fliers']:
+            flier.set(marker='o', markerfacecolor='gray', markersize=4, alpha=0.5)
+
+        # Formatting
+        ax.set_xlabel('Accuracy', fontsize=12, fontweight='bold')
+        ax.set_xlim(0, 1.05)
+        ax.set_ylabel('')
+
+        # Add gridlines
+        ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
+        ax.set_axisbelow(True)
+
+        # Extract short scenario name for title
+        short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+        short_name = short_name.replace('→', '→\n').replace('->', '→\n')
+        ax.set_title(f'{short_name}', fontsize=14, fontweight='bold', pad=10)
+
+        # Create legend with cell type colors (reversed to match plot order)
+        legend_patches = [Patch(facecolor=color_dict[ct], label=ct, alpha=0.85,
+                                edgecolor='black', linewidth=0.5)
+                         for ct in reversed(cell_type_order)]
+        ax.legend(handles=legend_patches, title='cell type',
+                 bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9,
+                 title_fontsize=10, frameon=True)
+
+        # Remove top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+
+        if output_dir:
+            safe_scenario = scenario.replace(':', '').replace(' ', '_').replace('→', 'to').replace('->', 'to')[:40]
+            safe_method = method_name.replace('-', '_')
+            filename = output_dir / f"percelltype_{safe_method}_{safe_scenario}.png"
+            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"    Saved per-celltype plot: {filename.name}")
+        else:
+            plt.show()
 
 
 def compute_per_celltype_f1(y_true, y_pred):
