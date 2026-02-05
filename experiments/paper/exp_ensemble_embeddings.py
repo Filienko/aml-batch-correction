@@ -9,6 +9,12 @@ Compares multiple cell type annotation methods:
 4. scTab (zero-shot foundation model)
 
 All methods are evaluated on the same reference/query pairs for fair comparison.
+
+Outputs:
+- UMAP visualizations (ground truth vs predictions)
+- Box-whisker plots for F1 scores across methods/datasets
+- Box-whisker plots for runtimes
+- Per-cell-type F1 breakdown for SCimilarity-MLP
 """
 import os
 import sys
@@ -25,18 +31,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.sparse import csr_matrix, csc_matrix
 from sklearn.ensemble import VotingClassifier
 from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, adjusted_rand_score
+from sklearn.metrics import accuracy_score, adjusted_rand_score, f1_score, classification_report
 
 from sccl import Pipeline
 from sccl.data import subset_data, preprocess_data, get_study_column, get_cell_type_column
 from sccl.evaluation import compute_metrics
 from sccl.models.celltypist import CellTypistModel
+
+# Set plotting style
+plt.style.use('seaborn-v0_8-whitegrid')
+sns.set_palette("husl")
 
 # ==============================================================================
 # CONFIGURATION
@@ -94,6 +106,13 @@ RUN_CELLTYPIST = True
 RUN_SCIMILARITY = True
 RUN_SINGLER = True
 RUN_SCTAB = True
+
+# Number of runs for statistical analysis (box-whisker plots)
+N_RUNS = 5
+
+# Figure output directory
+FIGURE_DIR = OUTPUT_DIR / "figures"
+FIGURE_DIR.mkdir(exist_ok=True)
 
 
 # ==============================================================================
@@ -160,6 +179,215 @@ def train_ensemble(embeddings_ref, labels_ref, ensemble_type='voting'):
 def predict_ensemble(ensemble, embeddings_query, ensemble_type='voting'):
     """Make predictions with ensemble."""
     return ensemble.predict(embeddings_query)
+
+
+# ==============================================================================
+# VISUALIZATION FUNCTIONS
+# ==============================================================================
+
+def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
+                         method_name, scenario_name, output_dir):
+    """
+    Create UMAP visualization comparing ground truth vs predicted cell types.
+
+    Parameters
+    ----------
+    adata_query : AnnData
+        Query data
+    embeddings_query : np.ndarray
+        SCimilarity embeddings for query cells
+    y_true : np.ndarray
+        Ground truth labels
+    y_pred : np.ndarray
+        Predicted labels
+    method_name : str
+        Name of the method (e.g., 'SCimilarity-mlp')
+    scenario_name : str
+        Name of the scenario
+    output_dir : Path
+        Output directory for figures
+    """
+    from sklearn.manifold import TSNE
+    import umap
+
+    # Filter out NaN labels for visualization
+    valid_mask = pd.notna(y_true)
+    embeddings_valid = embeddings_query[valid_mask]
+    y_true_valid = y_true[valid_mask]
+    y_pred_valid = y_pred[valid_mask]
+
+    # Compute UMAP on embeddings
+    print(f"    Computing UMAP for {method_name}...")
+    reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
+    umap_coords = reducer.fit_transform(embeddings_valid)
+
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    # Get unique labels for consistent coloring
+    all_labels = np.unique(np.concatenate([y_true_valid, y_pred_valid]))
+    n_colors = len(all_labels)
+    colors = sns.color_palette("husl", n_colors)
+    label_to_color = {label: colors[i] for i, label in enumerate(all_labels)}
+
+    # Plot ground truth
+    ax1 = axes[0]
+    for label in all_labels:
+        mask = y_true_valid == label
+        if mask.sum() > 0:
+            ax1.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
+                       c=[label_to_color[label]], label=label, s=5, alpha=0.6)
+    ax1.set_title(f'Ground Truth\n{scenario_name}', fontsize=12)
+    ax1.set_xlabel('UMAP1')
+    ax1.set_ylabel('UMAP2')
+
+    # Plot predictions
+    ax2 = axes[1]
+    for label in all_labels:
+        mask = y_pred_valid == label
+        if mask.sum() > 0:
+            ax2.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
+                       c=[label_to_color[label]], label=label, s=5, alpha=0.6)
+    ax2.set_title(f'{method_name} Predictions\n{scenario_name}', fontsize=12)
+    ax2.set_xlabel('UMAP1')
+    ax2.set_ylabel('UMAP2')
+
+    # Add legend (shared)
+    handles, labels = ax2.get_legend_handles_labels()
+    fig.legend(handles, labels, loc='center right', bbox_to_anchor=(1.15, 0.5),
+               fontsize=8, markerscale=2)
+
+    plt.tight_layout()
+
+    # Save figure
+    safe_scenario = scenario_name.replace(':', '').replace(' ', '_').replace('→', 'to')[:50]
+    safe_method = method_name.replace('-', '_')
+    filename = output_dir / f"umap_{safe_method}_{safe_scenario}.png"
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"    Saved UMAP to {filename}")
+
+    return umap_coords
+
+
+def plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=None):
+    """
+    Create box-whisker plot comparing methods across datasets.
+
+    Parameters
+    ----------
+    df_results : pd.DataFrame
+        Results dataframe with columns: scenario, method, run, f1_macro, time_sec
+    metric : str
+        Metric to plot ('f1_macro' or 'time_sec')
+    output_dir : Path
+        Output directory for figures
+    """
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Get unique scenarios and methods
+    scenarios = df_results['scenario'].unique()
+    methods = df_results['method'].unique()
+
+    # Filter to main methods only (not individual SCimilarity classifiers)
+    main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
+    df_plot = df_results[df_results['method'].isin(main_methods)].copy()
+
+    if len(df_plot) == 0:
+        print(f"    No data for main methods, using all methods")
+        df_plot = df_results.copy()
+        main_methods = methods
+
+    # Create box plot
+    sns.boxplot(data=df_plot, x='scenario', y=metric, hue='method', ax=ax)
+
+    # Formatting
+    metric_label = 'F1 Score (Macro)' if metric == 'f1_macro' else 'Runtime (seconds)'
+    ax.set_xlabel('Dataset/Scenario', fontsize=12)
+    ax.set_ylabel(metric_label, fontsize=12)
+    ax.set_title(f'Method Comparison: {metric_label}', fontsize=14)
+
+    # Rotate x-axis labels
+    plt.xticks(rotation=45, ha='right')
+
+    # Move legend outside
+    ax.legend(title='Method', bbox_to_anchor=(1.02, 1), loc='upper left')
+
+    plt.tight_layout()
+
+    if output_dir:
+        filename = output_dir / f"boxplot_methods_{metric}.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"    Saved boxplot to {filename}")
+    else:
+        plt.show()
+
+
+def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
+    """
+    Create box-whisker plot showing F1 per cell type for a specific method.
+
+    Parameters
+    ----------
+    df_per_celltype : pd.DataFrame
+        DataFrame with columns: scenario, cell_type, f1, run
+    method_name : str
+        Name of the method
+    output_dir : Path
+        Output directory for figures
+    """
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    # Create box plot
+    sns.boxplot(data=df_per_celltype, x='cell_type', y='f1', hue='scenario', ax=ax)
+
+    ax.set_xlabel('Cell Type', fontsize=12)
+    ax.set_ylabel('F1 Score', fontsize=12)
+    ax.set_title(f'{method_name}: Per-Cell-Type F1 Scores', fontsize=14)
+
+    # Rotate x-axis labels
+    plt.xticks(rotation=45, ha='right')
+
+    # Move legend outside
+    ax.legend(title='Dataset', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
+
+    plt.tight_layout()
+
+    if output_dir:
+        safe_method = method_name.replace('-', '_')
+        filename = output_dir / f"boxplot_percelltype_{safe_method}.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"    Saved per-celltype boxplot to {filename}")
+    else:
+        plt.show()
+
+
+def compute_per_celltype_f1(y_true, y_pred):
+    """
+    Compute F1 score for each cell type.
+
+    Returns
+    -------
+    dict : {cell_type: f1_score}
+    """
+    # Filter NaN
+    valid_mask = pd.notna(y_true)
+    y_true_valid = np.asarray(y_true)[valid_mask]
+    y_pred_valid = np.asarray(y_pred)[valid_mask]
+
+    # Get classification report as dict
+    report = classification_report(y_true_valid, y_pred_valid,
+                                   output_dict=True, zero_division=0)
+
+    # Extract per-class F1
+    per_class_f1 = {}
+    for label, metrics in report.items():
+        if label not in ['accuracy', 'macro avg', 'weighted avg']:
+            per_class_f1[label] = metrics['f1-score']
+
+    return per_class_f1
 
 
 # ==============================================================================
@@ -473,6 +701,249 @@ def run_sctab_prediction(adata_query, cell_type_col):
 # MAIN
 # ==============================================================================
 
+def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
+                          generate_umap=False):
+    """
+    Run a single experiment for one scenario.
+
+    Returns
+    -------
+    results : list of dict
+        Results for all methods
+    per_celltype_results : list of dict
+        Per-cell-type F1 for SCimilarity-mlp
+    embeddings_query : np.ndarray or None
+        SCimilarity embeddings (for UMAP)
+    mlp_predictions : np.ndarray or None
+        MLP predictions (for UMAP)
+    """
+    results = []
+    per_celltype_results = []
+    embeddings_query = None
+    mlp_predictions = None
+
+    # Set random seed for this run
+    np.random.seed(42 + run_id)
+
+    # 1. Prepare Data
+    adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
+    adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
+
+    if MAX_CELLS_PER_STUDY:
+        if adata_ref.n_obs > MAX_CELLS_PER_STUDY:
+            indices = np.random.choice(adata_ref.n_obs, MAX_CELLS_PER_STUDY, replace=False)
+            adata_ref = adata_ref[indices].copy()
+        if adata_query.n_obs > MAX_CELLS_PER_STUDY:
+            indices = np.random.choice(adata_query.n_obs, MAX_CELLS_PER_STUDY, replace=False)
+            adata_query = adata_query[indices].copy()
+
+    if run_id == 0:
+        print(f"  Reference: {adata_ref.n_obs:,} cells")
+        print(f"  Query:     {adata_query.n_obs:,} cells")
+
+    y_true = adata_query.obs[cell_type_col].values
+
+    # Helper to compute F1
+    def compute_f1(y_t, y_p):
+        valid_mask = pd.notna(y_t)
+        return f1_score(np.asarray(y_t)[valid_mask], np.asarray(y_p)[valid_mask],
+                       average='macro', zero_division=0)
+
+    # =========================================================================
+    # Method 1: CellTypist (Reference-based)
+    # =========================================================================
+    if RUN_CELLTYPIST:
+        try:
+            start = time.time()
+            ct_model = CellTypistModel(majority_voting=True)
+            ct_model.fit(adata_ref, target_column=cell_type_col)
+            ct_pred = ct_model.predict(adata_query)
+            elapsed = time.time() - start
+
+            metrics = compute_metrics(y_true=y_true, y_pred=ct_pred, metrics=['accuracy', 'ari'])
+            results.append({
+                'scenario': scenario['name'],
+                'method': 'CellTypist',
+                'type': 'reference-based',
+                'accuracy': metrics['accuracy'],
+                'ari': metrics['ari'],
+                'f1_macro': compute_f1(y_true, ct_pred),
+                'time_sec': elapsed,
+                'run': run_id,
+            })
+            if run_id == 0:
+                print(f"    [CellTypist] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+        except Exception as e:
+            if run_id == 0:
+                print(f"    [CellTypist] Error: {e}")
+        finally:
+            gc.collect()
+
+    # =========================================================================
+    # Method 2: SingleR (Reference-based)
+    # =========================================================================
+    if RUN_SINGLER:
+        try:
+            start = time.time()
+            singler_pred = run_singler_prediction(adata_ref, adata_query, cell_type_col)
+            elapsed = time.time() - start
+
+            if singler_pred is not None:
+                metrics = compute_metrics(y_true=y_true, y_pred=singler_pred, metrics=['accuracy', 'ari'])
+                results.append({
+                    'scenario': scenario['name'],
+                    'method': 'SingleR',
+                    'type': 'reference-based',
+                    'accuracy': metrics['accuracy'],
+                    'ari': metrics['ari'],
+                    'f1_macro': compute_f1(y_true, singler_pred),
+                    'time_sec': elapsed,
+                    'run': run_id,
+                })
+                if run_id == 0:
+                    print(f"    [SingleR] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+        except Exception as e:
+            if run_id == 0:
+                print(f"    [SingleR] Error: {e}")
+        finally:
+            gc.collect()
+
+    # =========================================================================
+    # Method 3: scTab (Zero-shot Foundation Model)
+    # =========================================================================
+    if RUN_SCTAB:
+        try:
+            start = time.time()
+            sctab_pred = run_sctab_prediction(adata_query, cell_type_col)
+            elapsed = time.time() - start
+
+            if sctab_pred is not None:
+                metrics = compute_metrics(y_true=y_true, y_pred=sctab_pred, metrics=['accuracy', 'ari'])
+                results.append({
+                    'scenario': scenario['name'],
+                    'method': 'scTab',
+                    'type': 'zero-shot',
+                    'accuracy': metrics['accuracy'],
+                    'ari': metrics['ari'],
+                    'f1_macro': compute_f1(y_true, sctab_pred),
+                    'time_sec': elapsed,
+                    'run': run_id,
+                })
+                if run_id == 0:
+                    print(f"    [scTab] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+        except Exception as e:
+            if run_id == 0:
+                print(f"    [scTab] Error: {e}")
+        finally:
+            gc.collect()
+
+    # =========================================================================
+    # Method 4: SCimilarity + Classifiers
+    # =========================================================================
+    if RUN_SCIMILARITY:
+        try:
+            adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
+            adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
+
+            emb_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
+            emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
+            labels_ref = adata_ref.obs[cell_type_col].values
+
+            # Store for UMAP (only first run)
+            if generate_umap and run_id == 0:
+                embeddings_query = emb_query.copy()
+
+            del adata_ref_prep, adata_query_prep
+            gc.collect()
+
+            # Individual classifiers
+            classifiers = create_ensemble_classifiers()
+
+            for clf_name, clf in classifiers.items():
+                try:
+                    start = time.time()
+                    clf.fit(emb_ref, labels_ref)
+                    pred_raw = clf.predict(emb_query)
+                    pred = refine_predictions(emb_query, pred_raw, k=50)
+                    elapsed = time.time() - start
+
+                    metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
+                    f1_val = compute_f1(y_true, pred)
+
+                    results.append({
+                        'scenario': scenario['name'],
+                        'method': f'SCimilarity-{clf_name}',
+                        'type': 'embedding-based',
+                        'accuracy': metrics['accuracy'],
+                        'ari': metrics['ari'],
+                        'f1_macro': f1_val,
+                        'time_sec': elapsed,
+                        'run': run_id,
+                    })
+
+                    if run_id == 0:
+                        print(f"    [SCimilarity-{clf_name}] Acc: {metrics['accuracy']:.3f}, F1: {f1_val:.3f}")
+
+                    # Store MLP predictions for UMAP and per-celltype analysis
+                    if clf_name == 'mlp':
+                        if generate_umap and run_id == 0:
+                            mlp_predictions = pred.copy()
+
+                        # Compute per-cell-type F1
+                        per_ct_f1 = compute_per_celltype_f1(y_true, pred)
+                        for ct, f1_val in per_ct_f1.items():
+                            per_celltype_results.append({
+                                'scenario': scenario['name'],
+                                'cell_type': ct,
+                                'f1': f1_val,
+                                'run': run_id,
+                            })
+
+                except Exception as e:
+                    if run_id == 0:
+                        print(f"    [SCimilarity-{clf_name}] Error: {e}")
+                finally:
+                    gc.collect()
+
+            # Ensemble Soft Voting
+            try:
+                start = time.time()
+                ensemble = train_ensemble(emb_ref, labels_ref, 'voting_soft')
+                pred_raw = predict_ensemble(ensemble, emb_query, 'voting_soft')
+                pred = refine_predictions(emb_query, pred_raw, k=50)
+                elapsed = time.time() - start
+
+                metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
+                results.append({
+                    'scenario': scenario['name'],
+                    'method': 'SCimilarity-Ensemble',
+                    'type': 'embedding-based',
+                    'accuracy': metrics['accuracy'],
+                    'ari': metrics['ari'],
+                    'f1_macro': compute_f1(y_true, pred),
+                    'time_sec': elapsed,
+                    'run': run_id,
+                })
+                if run_id == 0:
+                    print(f"    [SCimilarity-Ensemble] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+            except Exception as e:
+                if run_id == 0:
+                    print(f"    [SCimilarity-Ensemble] Error: {e}")
+            finally:
+                del emb_ref, emb_query
+                gc.collect()
+
+        except Exception as e:
+            if run_id == 0:
+                print(f"    SCimilarity error: {e}")
+
+    # Cleanup
+    del adata_ref, adata_query
+    gc.collect()
+
+    return results, per_celltype_results, embeddings_query, mlp_predictions, y_true
+
+
 def main():
     print("=" * 80)
     print("Comprehensive Cell Type Annotation Benchmark")
@@ -482,8 +953,10 @@ def main():
     print(f"  - SCimilarity + Ensemble:       {RUN_SCIMILARITY}")
     print(f"  - SingleR (reference-based):    {RUN_SINGLER}")
     print(f"  - scTab (zero-shot):            {RUN_SCTAB}")
+    print(f"\nNumber of runs per scenario: {N_RUNS}")
 
-    results = []
+    all_results = []
+    all_per_celltype = []
 
     print("\nLoading data...")
     adata = sc.read_h5ad(DATA_PATH, backed='r')
@@ -492,206 +965,96 @@ def main():
 
     for scenario in SCENARIOS:
         print(f"\n{'=' * 80}")
-        print(f"{scenario['name']}")
+        print(f"SCENARIO: {scenario['name']}")
         print('=' * 80)
 
-        # 1. Prepare Data
-        adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
-        adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
+        for run_id in range(N_RUNS):
+            print(f"\n  --- Run {run_id + 1}/{N_RUNS} ---")
 
-        if MAX_CELLS_PER_STUDY:
-            if adata_ref.n_obs > MAX_CELLS_PER_STUDY:
-                indices = np.random.choice(adata_ref.n_obs, MAX_CELLS_PER_STUDY, replace=False)
-                adata_ref = adata_ref[indices].copy()
-            if adata_query.n_obs > MAX_CELLS_PER_STUDY:
-                indices = np.random.choice(adata_query.n_obs, MAX_CELLS_PER_STUDY, replace=False)
-                adata_query = adata_query[indices].copy()
+            # Generate UMAP only on first run
+            generate_umap = (run_id == 0)
 
-        print(f"  Reference: {adata_ref.n_obs:,} cells")
-        print(f"  Query:     {adata_query.n_obs:,} cells")
+            results, per_ct, emb_query, mlp_pred, y_true = run_single_experiment(
+                scenario, adata, study_col, cell_type_col,
+                run_id=run_id, generate_umap=generate_umap
+            )
 
-        y_true = adata_query.obs[cell_type_col].values
+            all_results.extend(results)
+            all_per_celltype.extend(per_ct)
 
-        # =====================================================================
-        # Method 1: CellTypist (Reference-based)
-        # =====================================================================
-        if RUN_CELLTYPIST:
-            print("\n  [CellTypist]...", end=' ')
-            try:
-                start = time.time()
-                ct_model = CellTypistModel(majority_voting=True)
-                ct_model.fit(adata_ref, target_column=cell_type_col)
-                ct_pred = ct_model.predict(adata_query)
-                elapsed = time.time() - start
-
-                metrics = compute_metrics(y_true=y_true, y_pred=ct_pred, metrics=['accuracy', 'ari'])
-                results.append({
-                    'scenario': scenario['name'],
-                    'method': 'CellTypist',
-                    'type': 'reference-based',
-                    'accuracy': metrics['accuracy'],
-                    'ari': metrics['ari'],
-                    'time_sec': elapsed,
-                })
-                print(f"Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}, Time: {elapsed:.1f}s")
-
-            except Exception as e:
-                print(f"Error: {e}")
-            finally:
-                gc.collect()
-
-        # =====================================================================
-        # Method 2: SingleR (Reference-based)
-        # =====================================================================
-        if RUN_SINGLER:
-            print("\n  [SingleR]...", end=' ')
-            try:
-                start = time.time()
-                singler_pred = run_singler_prediction(adata_ref, adata_query, cell_type_col)
-                elapsed = time.time() - start
-
-                if singler_pred is not None:
-                    metrics = compute_metrics(y_true=y_true, y_pred=singler_pred, metrics=['accuracy', 'ari'])
-                    results.append({
-                        'scenario': scenario['name'],
-                        'method': 'SingleR',
-                        'type': 'reference-based',
-                        'accuracy': metrics['accuracy'],
-                        'ari': metrics['ari'],
-                        'time_sec': elapsed,
-                    })
-                    print(f"Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}, Time: {elapsed:.1f}s")
-                else:
-                    print("Failed")
-
-            except Exception as e:
-                print(f"Error: {e}")
-            finally:
-                gc.collect()
-
-        # =====================================================================
-        # Method 3: scTab (Zero-shot Foundation Model)
-        # =====================================================================
-        if RUN_SCTAB:
-            print("\n  [scTab]...", end=' ')
-            try:
-                start = time.time()
-                sctab_pred = run_sctab_prediction(adata_query, cell_type_col)
-                elapsed = time.time() - start
-
-                if sctab_pred is not None:
-                    metrics = compute_metrics(y_true=y_true, y_pred=sctab_pred, metrics=['accuracy', 'ari'])
-                    results.append({
-                        'scenario': scenario['name'],
-                        'method': 'scTab',
-                        'type': 'zero-shot',
-                        'accuracy': metrics['accuracy'],
-                        'ari': metrics['ari'],
-                        'time_sec': elapsed,
-                    })
-                    print(f"Acc: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}, Time: {elapsed:.1f}s")
-                else:
-                    print("Failed (model files not found or error)")
-
-            except Exception as e:
-                print(f"Error: {e}")
-            finally:
-                gc.collect()
-
-        # =====================================================================
-        # Method 4: SCimilarity + Ensemble
-        # =====================================================================
-        if RUN_SCIMILARITY:
-            print("\n  Computing SCimilarity embeddings...")
-            try:
-                adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-                adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
-
-                embeddings_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
-                embeddings_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
-                labels_ref = adata_ref.obs[cell_type_col].values
-
-                del adata_ref_prep, adata_query_prep
-                gc.collect()
-
-                # Individual classifiers
-                print("\n  Individual Classifiers:")
-                classifiers = create_ensemble_classifiers()
-
-                for clf_name, clf in classifiers.items():
-                    print(f"    [{clf_name}]...", end=' ')
-                    try:
-                        start = time.time()
-                        clf.fit(embeddings_ref, labels_ref)
-                        pred_raw = clf.predict(embeddings_query)
-                        pred = refine_predictions(embeddings_query, pred_raw, k=50)
-                        elapsed = time.time() - start
-
-                        metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
-                        results.append({
-                            'scenario': scenario['name'],
-                            'method': f'SCimilarity-{clf_name}',
-                            'type': 'embedding-based',
-                            'accuracy': metrics['accuracy'],
-                            'ari': metrics['ari'],
-                            'time_sec': elapsed,
-                        })
-                        print(f"Acc: {metrics['accuracy']:.3f}")
-
-                    except Exception as e:
-                        print(f"Error: {e}")
-                    finally:
-                        gc.collect()
-
-                # Ensemble Soft Voting
-                print(f"  [Ensemble-SoftVoting]...", end=' ')
+            # Generate UMAP visualization (first run only)
+            if generate_umap and emb_query is not None and mlp_pred is not None:
                 try:
-                    start = time.time()
-                    ensemble = train_ensemble(embeddings_ref, labels_ref, 'voting_soft')
-                    pred_raw = predict_ensemble(ensemble, embeddings_query, 'voting_soft')
-                    pred = refine_predictions(embeddings_query, pred_raw, k=50)
-                    elapsed = time.time() - start
-
-                    metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
-                    results.append({
-                        'scenario': scenario['name'],
-                        'method': 'SCimilarity-Ensemble',
-                        'type': 'embedding-based',
-                        'accuracy': metrics['accuracy'],
-                        'ari': metrics['ari'],
-                        'time_sec': elapsed,
-                    })
-                    print(f"Acc: {metrics['accuracy']:.3f}")
-
+                    plot_umap_comparison(
+                        adata_query=None,
+                        embeddings_query=emb_query,
+                        y_true=y_true,
+                        y_pred=mlp_pred,
+                        method_name='SCimilarity-mlp',
+                        scenario_name=scenario['name'],
+                        output_dir=FIGURE_DIR
+                    )
                 except Exception as e:
-                    print(f"Error: {e}")
-                finally:
-                    del embeddings_ref, embeddings_query
-                    gc.collect()
+                    print(f"    UMAP error: {e}")
 
-            except Exception as e:
-                print(f"  SCimilarity error: {e}")
+    # Convert to DataFrames
+    df_results = pd.DataFrame(all_results)
+    df_per_celltype = pd.DataFrame(all_per_celltype)
 
-        # Cleanup for next scenario
-        del adata_ref, adata_query
-        gc.collect()
-
-    # Results Table
+    # =========================================================================
+    # Generate Visualizations
+    # =========================================================================
     print("\n" + "=" * 80)
-    print("FINAL RESULTS")
+    print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
-    df_results = pd.DataFrame(results)
+    # Box-whisker plot: F1 comparison across methods
+    if len(df_results) > 0:
+        print("\n  Creating F1 comparison boxplot...")
+        plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=FIGURE_DIR)
 
-    for scenario_name in df_results['scenario'].unique():
-        print(f"\n{scenario_name}:")
-        scenario_df = df_results[df_results['scenario'] == scenario_name].copy()
-        scenario_df = scenario_df.sort_values('accuracy', ascending=False)
-        print(scenario_df[['method', 'type', 'accuracy', 'ari', 'time_sec']].to_string(index=False))
+        print("\n  Creating runtime comparison boxplot...")
+        plot_method_comparison_boxplot(df_results, metric='time_sec', output_dir=FIGURE_DIR)
 
+    # Per-cell-type F1 for SCimilarity-mlp
+    if len(df_per_celltype) > 0:
+        print("\n  Creating per-cell-type F1 boxplot...")
+        plot_per_celltype_f1(df_per_celltype, 'SCimilarity-mlp', output_dir=FIGURE_DIR)
+
+    # =========================================================================
+    # Summary Statistics
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("FINAL RESULTS (aggregated over {} runs)".format(N_RUNS))
+    print("=" * 80)
+
+    # Aggregate results by scenario and method
+    summary = df_results.groupby(['scenario', 'method']).agg({
+        'accuracy': ['mean', 'std'],
+        'f1_macro': ['mean', 'std'],
+        'ari': ['mean', 'std'],
+        'time_sec': ['mean', 'std'],
+    }).round(4)
+
+    print("\n" + summary.to_string())
+
+    # Save detailed results
     output_file = OUTPUT_DIR / "comprehensive_benchmark_results.csv"
     df_results.to_csv(output_file, index=False)
-    print(f"\nResults saved to: {output_file}")
+    print(f"\nDetailed results saved to: {output_file}")
+
+    # Save per-cell-type results
+    if len(df_per_celltype) > 0:
+        percelltype_file = OUTPUT_DIR / "percelltype_f1_results.csv"
+        df_per_celltype.to_csv(percelltype_file, index=False)
+        print(f"Per-cell-type F1 saved to: {percelltype_file}")
+
+    # Save summary
+    summary_file = OUTPUT_DIR / "benchmark_summary.csv"
+    summary.to_csv(summary_file)
+    print(f"Summary saved to: {summary_file}")
+
+    print(f"\nFigures saved to: {FIGURE_DIR}")
 
 
 if __name__ == "__main__":
