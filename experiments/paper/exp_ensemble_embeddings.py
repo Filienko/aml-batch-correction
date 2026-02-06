@@ -248,6 +248,12 @@ def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
     colors = sns.color_palette("husl", n_colors)
     label_to_color = {label: colors[i] for i, label in enumerate(all_labels)}
 
+    # Generate descriptive title for scenario
+    if 'Zheng' in scenario_name:
+        scenario_title = 'Zheng PBMC (Train → Test, Same Dataset)'
+    else:
+        scenario_title = scenario_name
+
     # Plot ground truth
     ax1 = axes[0]
     for label in all_labels:
@@ -255,7 +261,7 @@ def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
         if mask.sum() > 0:
             ax1.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
                        c=[label_to_color[label]], label=label, s=5, alpha=0.6)
-    ax1.set_title(f'Ground Truth\n{scenario_name}', fontsize=12)
+    ax1.set_title(f'Ground Truth\n{scenario_title}', fontsize=12)
     ax1.set_xlabel('UMAP1')
     ax1.set_ylabel('UMAP2')
 
@@ -266,7 +272,7 @@ def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
         if mask.sum() > 0:
             ax2.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
                        c=[label_to_color[label]], label=label, s=5, alpha=0.6)
-    ax2.set_title(f'{method_name} Predictions\n{scenario_name}', fontsize=12)
+    ax2.set_title(f'{method_name} Predictions\n{scenario_title}', fontsize=12)
     ax2.set_xlabel('UMAP1')
     ax2.set_ylabel('UMAP2')
 
@@ -374,10 +380,15 @@ def plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=Non
         ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
         ax.set_axisbelow(True)
 
-        # Extract short scenario name for title
-        short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
-        short_name = short_name.replace('→', '→\n').replace('->', '→\n')
-        ax.set_title(f'{short_name}', fontsize=14, fontweight='bold', pad=10)
+        # Generate descriptive title
+        if 'Zheng' in scenario:
+            # For Zheng dataset, make it clear it's same-dataset train/test
+            title = 'Zheng PBMC\n(Train → Test, Same Dataset)'
+        else:
+            # For cross-study scenarios, show the transfer direction
+            short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+            title = short_name.replace('→', '→\n').replace('->', '→\n')
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=10)
 
         # Create legend
         legend_patches = [Patch(facecolor=color_dict[m], label=m, alpha=0.85,
@@ -477,10 +488,13 @@ def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
         ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
         ax.set_axisbelow(True)
 
-        # Extract short scenario name for title
-        short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
-        short_name = short_name.replace('→', '→\n').replace('->', '→\n')
-        ax.set_title(f'{short_name}', fontsize=14, fontweight='bold', pad=10)
+        # Generate descriptive title
+        if 'Zheng' in scenario:
+            title = 'Zheng PBMC\n(Train → Test, Same Dataset)'
+        else:
+            short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+            title = short_name.replace('→', '→\n').replace('->', '→\n')
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=10)
 
         # Create legend with cell type colors (reversed to match plot order)
         legend_patches = [Patch(facecolor=color_dict[ct], label=ct, alpha=0.85,
