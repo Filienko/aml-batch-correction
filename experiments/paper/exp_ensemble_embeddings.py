@@ -59,6 +59,9 @@ MODEL_PATH = "/home/daniilf/aml-batch-correction/model_v1.1"
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Benchmark data directory (for Zheng dataset)
+BENCHMARK_DATA_DIR = Path(__file__).parent / "benchmark_data"
+
 # scTab model paths (for zero-shot baseline)
 SCTAB_CHECKPOINT = Path("scTab-checkpoints/scTab/run5/val_f1_macro_epoch=41_val_f1_macro=0.847.ckpt")
 MERLIN_DIR = Path("merlin_cxg_2023_05_15_sf-log1p_minimal")
@@ -74,7 +77,8 @@ SCENARIOS_SHORT = [
     },
 ]
 
-SCENARIOS = [
+# AML Atlas scenarios (subset from single file)
+AML_SCENARIOS = [
     {
         'name': 'Same-Platform: beneyto (10X Genomics) → Zhang (10X Genomics)',
         'reference': 'beneyto-calabuig-2023',
@@ -101,6 +105,20 @@ SCENARIOS = [
         'query': 'zhai_2022',
     },
 ]
+
+# Zheng dataset scenarios (separate files for reference/query)
+ZHENG_SCENARIOS = [
+    {
+        'name': 'Zheng PBMC: Train → Test',
+        'reference_file': BENCHMARK_DATA_DIR / 'zheng_train.h5ad',
+        'query_file': BENCHMARK_DATA_DIR / 'zheng_test.h5ad',
+        'type': 'separate_files',
+    },
+]
+
+# Combine all scenarios (AML uses 'reference'/'query' study names, Zheng uses file paths)
+SCENARIOS = AML_SCENARIOS + ZHENG_SCENARIOS
+
 # Which methods to run (set to False to skip)
 RUN_CELLTYPIST = True
 RUN_SCIMILARITY = True
@@ -850,10 +868,37 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
     # Set random seed for this run
     np.random.seed(42 + run_id)
 
-    # 1. Prepare Data
-    adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
-    adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
+    # 1. Prepare Data - handle both scenario types
+    if scenario.get('type') == 'separate_files':
+        # Zheng-style: separate files for reference and query
+        ref_file = scenario['reference_file']
+        query_file = scenario['query_file']
 
+        if not Path(ref_file).exists():
+            if run_id == 0:
+                print(f"  SKIP: Reference file not found: {ref_file}")
+            return [], [], None, None, None
+        if not Path(query_file).exists():
+            if run_id == 0:
+                print(f"  SKIP: Query file not found: {query_file}")
+            return [], [], None, None, None
+
+        adata_ref = sc.read_h5ad(ref_file)
+        adata_query = sc.read_h5ad(query_file)
+
+        # Auto-detect cell type column for Zheng data
+        cell_type_col_local = cell_type_col
+        for col in ['cell_type', 'celltype', 'Cell Type', 'label', 'labels', 'cell_label']:
+            if col in adata_ref.obs.columns:
+                cell_type_col_local = col
+                break
+    else:
+        # AML-style: subset from single file using study names
+        adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
+        adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
+        cell_type_col_local = cell_type_col
+
+    # Subsample if needed
     if MAX_CELLS_PER_STUDY:
         if adata_ref.n_obs > MAX_CELLS_PER_STUDY:
             indices = np.random.choice(adata_ref.n_obs, MAX_CELLS_PER_STUDY, replace=False)
@@ -866,7 +911,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
         print(f"  Reference: {adata_ref.n_obs:,} cells")
         print(f"  Query:     {adata_query.n_obs:,} cells")
 
-    y_true = adata_query.obs[cell_type_col].values
+    y_true = adata_query.obs[cell_type_col_local].values
 
     # Helper to compute F1
     def compute_f1(y_t, y_p):
@@ -881,7 +926,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
         try:
             start = time.time()
             ct_model = CellTypistModel(majority_voting=True)
-            ct_model.fit(adata_ref, target_column=cell_type_col)
+            ct_model.fit(adata_ref, target_column=cell_type_col_local)
             ct_pred = ct_model.predict(adata_query)
             elapsed = time.time() - start
 
@@ -910,7 +955,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
     if RUN_SINGLER:
         try:
             start = time.time()
-            singler_pred = run_singler_prediction(adata_ref, adata_query, cell_type_col)
+            singler_pred = run_singler_prediction(adata_ref, adata_query, cell_type_col_local)
             elapsed = time.time() - start
 
             if singler_pred is not None:
@@ -939,7 +984,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
     if RUN_SCTAB:
         try:
             start = time.time()
-            sctab_pred = run_sctab_prediction(adata_query, cell_type_col)
+            sctab_pred = run_sctab_prediction(adata_query, cell_type_col_local)
             elapsed = time.time() - start
 
             if sctab_pred is not None:
@@ -972,7 +1017,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
             emb_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
             emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
-            labels_ref = adata_ref.obs[cell_type_col].values
+            labels_ref = adata_ref.obs[cell_type_col_local].values
 
             # Store for UMAP (only first run)
             if generate_umap and run_id == 0:
