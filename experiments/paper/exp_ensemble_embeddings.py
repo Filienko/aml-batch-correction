@@ -537,6 +537,51 @@ def compute_per_celltype_f1(y_true, y_pred):
 # SINGLER METHODS
 # ==============================================================================
 
+def preprocess_zheng_data(adata):
+    """
+    Preprocess Zheng dataset to standardize format.
+
+    - Sets var.index to gene symbols (from var['gene_symbols'])
+    - Converts integer cell type labels to string names (using uns['cell_type_names'])
+
+    Parameters
+    ----------
+    adata : AnnData
+        Zheng dataset
+
+    Returns
+    -------
+    adata : AnnData
+        Preprocessed dataset with gene symbols as var.index and string labels
+    """
+    adata = adata.copy()
+
+    # Fix gene names: set var.index to gene symbols
+    if 'gene_symbols' in adata.var.columns:
+        print(f"    Setting var.index to gene symbols...")
+        adata.var.index = adata.var['gene_symbols'].values
+        adata.var_names_make_unique()
+
+    # Fix cell type labels: convert integers to string names
+    if 'cell_type_names' in adata.uns:
+        cell_type_names = adata.uns['cell_type_names']
+
+        # Find the cell type column
+        for col in ['cell_type_label', 'cell_type', 'celltype', 'label', 'labels']:
+            if col in adata.obs.columns:
+                labels = adata.obs[col].values
+                # Check if labels are integers
+                if np.issubdtype(labels.dtype, np.integer):
+                    print(f"    Converting integer labels to cell type names...")
+                    # Map integer indices to string names
+                    string_labels = [cell_type_names[i] if i < len(cell_type_names) else f'Unknown_{i}'
+                                    for i in labels]
+                    adata.obs[col] = string_labels
+                break
+
+    return adata
+
+
 def log_normalize(X, target_sum=1e4):
     """Log-normalize count matrix (like scanpy.pp.normalize_total + log1p)."""
     if hasattr(X, 'toarray'):
@@ -680,12 +725,20 @@ def harmonize_sctab_labels(predictions, ground_truth_labels=None):
 
     # Fuzzy matching for unmapped labels
     if ground_truth_labels is not None:
-        gt_labels_set = set(np.unique(ground_truth_labels[pd.notna(ground_truth_labels)]))
+        # Convert ground truth to strings for comparison
+        gt_valid = ground_truth_labels[pd.notna(ground_truth_labels)]
+        gt_labels_set = set([str(x) for x in np.unique(gt_valid)])
         unmapped = set(np.unique(harmonized)) - gt_labels_set
 
         for pred_label in unmapped:
+            # Ensure pred_label is string
+            if not isinstance(pred_label, str):
+                continue
             pred_lower = pred_label.lower()
             for gt_label in gt_labels_set:
+                # Ensure gt_label is string
+                if not isinstance(gt_label, str):
+                    continue
                 gt_lower = gt_label.lower()
                 if gt_lower in pred_lower or pred_lower in gt_lower:
                     mask = harmonized == pred_label
@@ -886,9 +939,15 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
         adata_ref = sc.read_h5ad(ref_file)
         adata_query = sc.read_h5ad(query_file)
 
+        # Preprocess Zheng data (fix gene names and convert integer labels)
+        if run_id == 0:
+            print("  Preprocessing Zheng data...")
+        adata_ref = preprocess_zheng_data(adata_ref)
+        adata_query = preprocess_zheng_data(adata_query)
+
         # Auto-detect cell type column for Zheng data
         cell_type_col_local = cell_type_col
-        for col in ['cell_type', 'celltype', 'Cell Type', 'cell_type_label', 'label', 'labels', 'cell_label']:
+        for col in ['cell_type_label', 'cell_type', 'celltype', 'Cell Type', 'label', 'labels', 'cell_label']:
             if col in adata_ref.obs.columns:
                 cell_type_col_local = col
                 break
