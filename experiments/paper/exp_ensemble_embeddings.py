@@ -888,7 +888,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
         # Auto-detect cell type column for Zheng data
         cell_type_col_local = cell_type_col
-        for col in ['cell_type', 'celltype', 'Cell Type', 'label', 'labels', 'cell_label']:
+        for col in ['cell_type', 'celltype', 'Cell Type', 'cell_type_label', 'label', 'labels', 'cell_label']:
             if col in adata_ref.obs.columns:
                 cell_type_col_local = col
                 break
@@ -1197,6 +1197,10 @@ def main():
     print("\n" + "=" * 80)
     print("FINAL RESULTS (aggregated over {} runs)".format(N_RUNS))
     print("=" * 80)
+
+    if len(df_results) == 0:
+        print("\nNo results collected! Check if data files exist and methods ran successfully.")
+        return
 
     # Aggregate results by scenario and method
     summary = df_results.groupby(['scenario', 'method']).agg({
