@@ -523,7 +523,9 @@ def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
 
 def plot_timing_breakdown(df_results, output_dir=None):
     """
-    Create stacked bar plot showing training vs inference time breakdown.
+    Create box plot showing training vs inference time breakdown.
+    Each method gets two boxes: one for training time, one for inference time.
+    Uses same style as method comparison boxplots.
 
     Parameters
     ----------
@@ -549,62 +551,90 @@ def plot_timing_breakdown(df_results, output_dir=None):
 
     scenarios = df_plot['scenario'].unique()
 
+    # Colors for train/inference
+    train_color = '#4ECDC4'  # Teal
+    infer_color = '#FF6B6B'  # Coral
+
     for scenario in scenarios:
         df_scenario = df_plot[df_plot['scenario'] == scenario].copy()
 
-        # Aggregate by method (mean times)
-        timing = df_scenario.groupby('method').agg({
-            'train_time_sec': 'mean',
-            'inference_time_sec': 'mean',
-        }).reset_index()
+        # Sort methods by median total time
+        method_totals = df_scenario.groupby('method')['time_sec'].median().sort_values(ascending=True)
+        method_order = method_totals.index.tolist()
 
-        # Sort by total time
-        timing['total'] = timing['train_time_sec'] + timing['inference_time_sec']
-        timing = timing.sort_values('total', ascending=True)
-
-        # Create figure
-        n_methods = len(timing)
-        fig_height = max(4, n_methods * 0.8)
+        # Create figure - height based on number of methods (2 boxes per method)
+        n_methods = len(method_order)
+        fig_height = max(5, n_methods * 1.2)
         fig, ax = plt.subplots(figsize=(10, fig_height))
 
-        y_pos = np.arange(n_methods)
+        # Prepare data: for each method, create train and inference entries
+        box_data = []
+        box_labels = []
+        box_colors = []
 
-        # Create stacked horizontal bar
-        bars_train = ax.barh(y_pos, timing['train_time_sec'], color='#4ECDC4',
-                             label='Training', alpha=0.85, edgecolor='black', linewidth=0.5)
-        bars_infer = ax.barh(y_pos, timing['inference_time_sec'], left=timing['train_time_sec'],
-                             color='#FF6B6B', label='Inference', alpha=0.85,
-                             edgecolor='black', linewidth=0.5)
+        for method in method_order:
+            method_data = df_scenario[df_scenario['method'] == method]
+            # Training time
+            box_data.append(method_data['train_time_sec'].values)
+            box_labels.append(f'{method} (Train)')
+            box_colors.append(train_color)
+            # Inference time
+            box_data.append(method_data['inference_time_sec'].values)
+            box_labels.append(f'{method} (Infer)')
+            box_colors.append(infer_color)
 
-        # Labels
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(timing['method'])
+        # Create horizontal box plot
+        bp = ax.boxplot(
+            box_data,
+            vert=False,
+            patch_artist=True,
+            labels=box_labels,
+            widths=0.6,
+        )
+
+        # Color each box
+        for patch, color in zip(bp['boxes'], box_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.85)
+            patch.set_edgecolor('black')
+            patch.set_linewidth(1)
+
+        # Style whiskers, caps, medians
+        for whisker in bp['whiskers']:
+            whisker.set(color='black', linewidth=1)
+        for cap in bp['caps']:
+            cap.set(color='black', linewidth=1)
+        for median in bp['medians']:
+            median.set(color='black', linewidth=1.5)
+        for flier in bp['fliers']:
+            flier.set(marker='o', markerfacecolor='gray', markersize=4, alpha=0.5)
+
+        # Formatting
         ax.set_xlabel('Time (seconds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('')
 
-        # Add value labels on bars
-        for i, (train, infer) in enumerate(zip(timing['train_time_sec'], timing['inference_time_sec'])):
-            total = train + infer
-            if train > total * 0.15:  # Only show if bar is wide enough
-                ax.text(train/2, i, f'{train:.1f}s', ha='center', va='center',
-                       fontsize=9, fontweight='bold', color='white')
-            if infer > total * 0.15:
-                ax.text(train + infer/2, i, f'{infer:.1f}s', ha='center', va='center',
-                       fontsize=9, fontweight='bold', color='white')
+        # Add gridlines
+        ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
+        ax.set_axisbelow(True)
 
         # Generate descriptive title
         if 'Zheng' in scenario:
-            title = 'Zheng PBMC (Train → Test, Same Dataset)\nTiming Breakdown'
+            title = 'Zheng PBMC\n(Train → Test, Same Dataset)'
         else:
             short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
-            title = f'{short_name}\nTiming Breakdown'
+            title = short_name.replace('→', '→\n').replace('->', '→\n')
         ax.set_title(title, fontsize=14, fontweight='bold', pad=10)
 
-        # Add legend
-        ax.legend(loc='lower right', fontsize=10)
+        # Create legend
+        legend_patches = [
+            Patch(facecolor=train_color, label='Training', alpha=0.85, edgecolor='black', linewidth=0.5),
+            Patch(facecolor=infer_color, label='Inference', alpha=0.85, edgecolor='black', linewidth=0.5),
+        ]
+        ax.legend(handles=legend_patches, title='Phase',
+                 bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=10,
+                 title_fontsize=11, frameon=True)
 
-        # Grid and spines
-        ax.xaxis.grid(True, linestyle='--', alpha=0.6)
-        ax.set_axisbelow(True)
+        # Remove top and right spines
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
@@ -612,7 +642,8 @@ def plot_timing_breakdown(df_results, output_dir=None):
 
         if output_dir:
             safe_scenario = scenario.replace(':', '').replace(' ', '_').replace('→', 'to').replace('->', 'to')[:40]
-            filename = output_dir / f"timing_breakdown_{safe_scenario}.png"
+            # Use same filename pattern as old timing figure
+            filename = output_dir / f"methods_time_sec_{safe_scenario}.png"
             plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
             plt.close()
             print(f"    Saved timing breakdown: {filename.name}")
@@ -1403,10 +1434,7 @@ def main():
         print("\n  Creating F1 comparison boxplot...")
         plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=FIGURE_DIR)
 
-        print("\n  Creating runtime comparison boxplot...")
-        plot_method_comparison_boxplot(df_results, metric='time_sec', output_dir=FIGURE_DIR)
-
-        print("\n  Creating timing breakdown plot (train vs inference)...")
+        print("\n  Creating runtime comparison boxplot (train vs inference breakdown)...")
         plot_timing_breakdown(df_results, output_dir=FIGURE_DIR)
 
     # Per-cell-type F1 for SCimilarity-mlp
