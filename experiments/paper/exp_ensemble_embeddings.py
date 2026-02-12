@@ -631,6 +631,209 @@ def plot_timing_breakdown(df_results, output_dir=None):
             plt.show()
 
 
+def plot_accumulative_accuracy(df_results, output_dir=None):
+    """
+    Create box plot showing F1 scores aggregated across ALL dataset configurations.
+    Each method gets one box summarizing its performance across all scenarios.
+
+    Parameters
+    ----------
+    df_results : pd.DataFrame
+        Results dataframe with columns: scenario, method, f1_macro, run
+    output_dir : Path
+        Output directory for figures
+    """
+    from matplotlib.patches import Patch
+
+    # Filter to main methods
+    main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
+    df_plot = df_results[df_results['method'].isin(main_methods)].copy()
+
+    if len(df_plot) == 0:
+        df_plot = df_results.copy()
+        main_methods = df_results['method'].unique().tolist()
+
+    # Sort methods by median F1 (ascending so highest is at top)
+    method_medians = df_plot.groupby('method')['f1_macro'].median().sort_values(ascending=True)
+    method_order = method_medians.index.tolist()
+
+    # Create figure
+    n_methods = len(method_order)
+    fig_height = max(4, n_methods * 0.8)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    # Color palette
+    colors = sns.color_palette("husl", n_methods)
+    color_dict = {m: colors[i] for i, m in enumerate(method_order)}
+
+    # Prepare data for boxplot - aggregate all scenarios
+    box_data = [df_plot[df_plot['method'] == m]['f1_macro'].values for m in method_order]
+
+    # Create horizontal box plot
+    bp = ax.boxplot(
+        box_data,
+        vert=False,
+        patch_artist=True,
+        labels=method_order,
+        widths=0.6,
+    )
+
+    # Color each box
+    for patch, method in zip(bp['boxes'], method_order):
+        patch.set_facecolor(color_dict[method])
+        patch.set_alpha(0.85)
+        patch.set_edgecolor('black')
+        patch.set_linewidth(1)
+
+    # Style whiskers, caps, medians
+    for whisker in bp['whiskers']:
+        whisker.set(color='black', linewidth=1)
+    for cap in bp['caps']:
+        cap.set(color='black', linewidth=1)
+    for median in bp['medians']:
+        median.set(color='black', linewidth=1.5)
+    for flier in bp['fliers']:
+        flier.set(marker='o', markerfacecolor='gray', markersize=4, alpha=0.5)
+
+    # Formatting
+    ax.set_xlabel('F1 Score (Macro)', fontsize=12, fontweight='bold')
+    ax.set_xlim(0, 1.05)
+    ax.set_ylabel('')
+
+    # Add gridlines
+    ax.xaxis.grid(True, linestyle='--', alpha=0.6, color='gray')
+    ax.set_axisbelow(True)
+
+    # Count scenarios
+    n_scenarios = df_plot['scenario'].nunique()
+    n_runs = df_plot['run'].nunique()
+    ax.set_title(f'F1 Score Across All Datasets\n({n_scenarios} scenarios × {n_runs} runs)',
+                fontsize=14, fontweight='bold', pad=10)
+
+    # Create legend
+    legend_patches = [Patch(facecolor=color_dict[m], label=m, alpha=0.85,
+                            edgecolor='black', linewidth=0.5)
+                     for m in reversed(method_order)]
+    ax.legend(handles=legend_patches, title='Method',
+             bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=10,
+             title_fontsize=11, frameon=True)
+
+    # Remove top and right spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.tight_layout()
+
+    if output_dir:
+        filename = output_dir / "accumulative_f1_all_datasets.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved accumulative F1 plot: {filename.name}")
+    else:
+        plt.show()
+
+
+def plot_accumulative_time(df_results, output_dir=None):
+    """
+    Create stacked bar plot showing timing aggregated across ALL dataset configurations.
+    Each method shows mean training and inference time across all scenarios.
+
+    Parameters
+    ----------
+    df_results : pd.DataFrame
+        Results dataframe with columns: scenario, method, train_time_sec, inference_time_sec
+    output_dir : Path
+        Output directory for figures
+    """
+    from matplotlib.patches import Patch
+
+    # Check if timing columns exist
+    if 'train_time_sec' not in df_results.columns or 'inference_time_sec' not in df_results.columns:
+        print("    Timing columns not found, skipping accumulative time plot...")
+        return
+
+    # Filter to main methods
+    main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
+    df_plot = df_results[df_results['method'].isin(main_methods)].copy()
+
+    if len(df_plot) == 0:
+        df_plot = df_results.copy()
+        main_methods = df_results['method'].unique().tolist()
+
+    # Colors for train/inference
+    train_color = '#4ECDC4'  # Teal
+    infer_color = '#FF6B6B'  # Coral
+
+    # Aggregate across ALL scenarios - compute mean times
+    timing = df_plot.groupby('method').agg({
+        'train_time_sec': 'mean',
+        'inference_time_sec': 'mean',
+    }).reset_index()
+
+    # Sort by total time
+    timing['total'] = timing['train_time_sec'] + timing['inference_time_sec']
+    timing = timing.sort_values('total', ascending=True)
+
+    # Create figure
+    n_methods = len(timing)
+    fig_height = max(4, n_methods * 0.8)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    y_pos = np.arange(n_methods)
+
+    # Create stacked horizontal bar
+    bars_train = ax.barh(y_pos, timing['train_time_sec'], color=train_color,
+                         label='Training', alpha=0.85, edgecolor='black', linewidth=0.5)
+    bars_infer = ax.barh(y_pos, timing['inference_time_sec'], left=timing['train_time_sec'],
+                         color=infer_color, label='Inference', alpha=0.85,
+                         edgecolor='black', linewidth=0.5)
+
+    # Labels
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(timing['method'])
+    ax.set_xlabel('Time (seconds)', fontsize=12, fontweight='bold')
+
+    # Add value labels on bars
+    for i, (train, infer) in enumerate(zip(timing['train_time_sec'], timing['inference_time_sec'])):
+        total = train + infer
+        if train > total * 0.15:  # Only show if bar is wide enough
+            ax.text(train/2, i, f'{train:.1f}s', ha='center', va='center',
+                   fontsize=9, fontweight='bold', color='white')
+        if infer > total * 0.15:
+            ax.text(train + infer/2, i, f'{infer:.1f}s', ha='center', va='center',
+                   fontsize=9, fontweight='bold', color='white')
+
+    # Count scenarios
+    n_scenarios = df_plot['scenario'].nunique()
+    n_runs = df_plot['run'].nunique()
+    ax.set_title(f'Average Runtime Across All Datasets\n({n_scenarios} scenarios × {n_runs} runs)',
+                fontsize=14, fontweight='bold', pad=10)
+
+    # Add legend
+    legend_patches = [
+        Patch(facecolor=train_color, label='Training', alpha=0.85, edgecolor='black', linewidth=0.5),
+        Patch(facecolor=infer_color, label='Inference', alpha=0.85, edgecolor='black', linewidth=0.5),
+    ]
+    ax.legend(handles=legend_patches, title='Phase', loc='lower right', fontsize=10,
+             title_fontsize=11, frameon=True)
+
+    # Grid and spines
+    ax.xaxis.grid(True, linestyle='--', alpha=0.6)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.tight_layout()
+
+    if output_dir:
+        filename = output_dir / "accumulative_time_all_datasets.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved accumulative time plot: {filename.name}")
+    else:
+        plt.show()
+
+
 def compute_per_celltype_f1(y_true, y_pred):
     """
     Compute F1 score for each cell type.
@@ -1409,13 +1612,20 @@ def main():
     print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
-    # Box-whisker plot: F1 comparison across methods
+    # Box-whisker plot: F1 comparison across methods (per scenario)
     if len(df_results) > 0:
-        print("\n  Creating F1 comparison boxplot...")
+        print("\n  Creating F1 comparison boxplot (per scenario)...")
         plot_method_comparison_boxplot(df_results, metric='f1_macro', output_dir=FIGURE_DIR)
 
-        print("\n  Creating runtime comparison boxplot (train vs inference breakdown)...")
+        print("\n  Creating runtime comparison boxplot (train vs inference breakdown, per scenario)...")
         plot_timing_breakdown(df_results, output_dir=FIGURE_DIR)
+
+        # Accumulative plots (aggregated across all scenarios)
+        print("\n  Creating accumulative F1 plot (all datasets combined)...")
+        plot_accumulative_accuracy(df_results, output_dir=FIGURE_DIR)
+
+        print("\n  Creating accumulative time plot (all datasets combined)...")
+        plot_accumulative_time(df_results, output_dir=FIGURE_DIR)
 
     # Per-cell-type F1 for SCimilarity-mlp
     if len(df_per_celltype) > 0:
