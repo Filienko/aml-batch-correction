@@ -521,6 +521,105 @@ def plot_per_celltype_f1(df_per_celltype, method_name, output_dir=None):
             plt.show()
 
 
+def plot_timing_breakdown(df_results, output_dir=None):
+    """
+    Create stacked bar plot showing training vs inference time breakdown.
+
+    Parameters
+    ----------
+    df_results : pd.DataFrame
+        Results dataframe with columns: scenario, method, train_time_sec, inference_time_sec
+    output_dir : Path
+        Output directory for figures
+    """
+    from matplotlib.patches import Patch
+
+    # Check if timing columns exist
+    if 'train_time_sec' not in df_results.columns or 'inference_time_sec' not in df_results.columns:
+        print("    Timing breakdown columns not found, skipping...")
+        return
+
+    # Filter to main methods
+    main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
+    df_plot = df_results[df_results['method'].isin(main_methods)].copy()
+
+    if len(df_plot) == 0:
+        df_plot = df_results.copy()
+        main_methods = df_results['method'].unique().tolist()
+
+    scenarios = df_plot['scenario'].unique()
+
+    for scenario in scenarios:
+        df_scenario = df_plot[df_plot['scenario'] == scenario].copy()
+
+        # Aggregate by method (mean times)
+        timing = df_scenario.groupby('method').agg({
+            'train_time_sec': 'mean',
+            'inference_time_sec': 'mean',
+        }).reset_index()
+
+        # Sort by total time
+        timing['total'] = timing['train_time_sec'] + timing['inference_time_sec']
+        timing = timing.sort_values('total', ascending=True)
+
+        # Create figure
+        n_methods = len(timing)
+        fig_height = max(4, n_methods * 0.8)
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+
+        y_pos = np.arange(n_methods)
+
+        # Create stacked horizontal bar
+        bars_train = ax.barh(y_pos, timing['train_time_sec'], color='#4ECDC4',
+                             label='Training', alpha=0.85, edgecolor='black', linewidth=0.5)
+        bars_infer = ax.barh(y_pos, timing['inference_time_sec'], left=timing['train_time_sec'],
+                             color='#FF6B6B', label='Inference', alpha=0.85,
+                             edgecolor='black', linewidth=0.5)
+
+        # Labels
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(timing['method'])
+        ax.set_xlabel('Time (seconds)', fontsize=12, fontweight='bold')
+
+        # Add value labels on bars
+        for i, (train, infer) in enumerate(zip(timing['train_time_sec'], timing['inference_time_sec'])):
+            total = train + infer
+            if train > total * 0.15:  # Only show if bar is wide enough
+                ax.text(train/2, i, f'{train:.1f}s', ha='center', va='center',
+                       fontsize=9, fontweight='bold', color='white')
+            if infer > total * 0.15:
+                ax.text(train + infer/2, i, f'{infer:.1f}s', ha='center', va='center',
+                       fontsize=9, fontweight='bold', color='white')
+
+        # Generate descriptive title
+        if 'Zheng' in scenario:
+            title = 'Zheng PBMC (Train → Test, Same Dataset)\nTiming Breakdown'
+        else:
+            short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+            title = f'{short_name}\nTiming Breakdown'
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=10)
+
+        # Add legend
+        ax.legend(loc='lower right', fontsize=10)
+
+        # Grid and spines
+        ax.xaxis.grid(True, linestyle='--', alpha=0.6)
+        ax.set_axisbelow(True)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+
+        if output_dir:
+            safe_scenario = scenario.replace(':', '').replace(' ', '_').replace('→', 'to').replace('->', 'to')[:40]
+            filename = output_dir / f"timing_breakdown_{safe_scenario}.png"
+            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"    Saved timing breakdown: {filename.name}")
+        else:
+            plt.show()
+
+
 def compute_per_celltype_f1(y_true, y_pred):
     """
     Compute F1 score for each cell type.
@@ -997,11 +1096,16 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
     # =========================================================================
     if RUN_CELLTYPIST:
         try:
-            start = time.time()
+            # Training
+            train_start = time.time()
             ct_model = CellTypistModel(majority_voting=True)
             ct_model.fit(adata_ref, target_column=cell_type_col_local)
+            train_time = time.time() - train_start
+
+            # Inference
+            infer_start = time.time()
             ct_pred = ct_model.predict(adata_query)
-            elapsed = time.time() - start
+            infer_time = time.time() - infer_start
 
             metrics = compute_metrics(y_true=y_true, y_pred=ct_pred, metrics=['accuracy', 'ari'])
             results.append({
@@ -1011,11 +1115,13 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                 'accuracy': metrics['accuracy'],
                 'ari': metrics['ari'],
                 'f1_macro': compute_f1(y_true, ct_pred),
-                'time_sec': elapsed,
+                'train_time_sec': train_time,
+                'inference_time_sec': infer_time,
+                'time_sec': train_time + infer_time,
                 'run': run_id,
             })
             if run_id == 0:
-                print(f"    [CellTypist] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+                print(f"    [CellTypist] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}, Train: {train_time:.1f}s, Infer: {infer_time:.1f}s")
         except Exception as e:
             if run_id == 0:
                 print(f"    [CellTypist] Error: {e}")
@@ -1023,13 +1129,20 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
             gc.collect()
 
     # =========================================================================
-    # Method 2: SingleR (Reference-based)
+    # Method 2: SingleR (Reference-based, correlation-based - no explicit training)
+    # Note: SingleR is correlation-based, so "training" = building reference profile
+    #       and "inference" = computing correlations for query cells. The annotate_single
+    #       function does both internally, so we report train_time=0 (no learnable params).
     # =========================================================================
     if RUN_SINGLER:
         try:
-            start = time.time()
+            # SingleR has no explicit training step - it's correlation-based
+            train_time = 0.0
+
+            # Inference (includes building reference profile + computing correlations)
+            infer_start = time.time()
             singler_pred = run_singler_prediction(adata_ref, adata_query, cell_type_col_local)
-            elapsed = time.time() - start
+            infer_time = time.time() - infer_start
 
             if singler_pred is not None:
                 metrics = compute_metrics(y_true=y_true, y_pred=singler_pred, metrics=['accuracy', 'ari'])
@@ -1040,11 +1153,13 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, singler_pred),
-                    'time_sec': elapsed,
+                    'train_time_sec': train_time,
+                    'inference_time_sec': infer_time,
+                    'time_sec': train_time + infer_time,
                     'run': run_id,
                 })
                 if run_id == 0:
-                    print(f"    [SingleR] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+                    print(f"    [SingleR] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}, Train: {train_time:.1f}s, Infer: {infer_time:.1f}s")
         except Exception as e:
             if run_id == 0:
                 print(f"    [SingleR] Error: {e}")
@@ -1052,13 +1167,17 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
             gc.collect()
 
     # =========================================================================
-    # Method 3: scTab (Zero-shot Foundation Model)
+    # Method 3: scTab (Zero-shot Foundation Model - no training, pre-trained)
     # =========================================================================
     if RUN_SCTAB:
         try:
-            start = time.time()
+            # scTab is zero-shot - no training step, model is pre-trained
+            train_time = 0.0
+
+            # Inference only
+            infer_start = time.time()
             sctab_pred = run_sctab_prediction(adata_query, cell_type_col_local)
-            elapsed = time.time() - start
+            infer_time = time.time() - infer_start
 
             if sctab_pred is not None:
                 metrics = compute_metrics(y_true=y_true, y_pred=sctab_pred, metrics=['accuracy', 'ari'])
@@ -1069,11 +1188,13 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, sctab_pred),
-                    'time_sec': elapsed,
+                    'train_time_sec': train_time,
+                    'inference_time_sec': infer_time,
+                    'time_sec': train_time + infer_time,
                     'run': run_id,
                 })
                 if run_id == 0:
-                    print(f"    [scTab] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+                    print(f"    [scTab] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}, Train: {train_time:.1f}s, Infer: {infer_time:.1f}s")
         except Exception as e:
             if run_id == 0:
                 print(f"    [scTab] Error: {e}")
@@ -1082,15 +1203,23 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
     # =========================================================================
     # Method 4: SCimilarity + Classifiers
+    # Training time = reference preprocessing + reference embedding + classifier fit
+    # Inference time = query preprocessing + query embedding + classifier predict + refinement
     # =========================================================================
     if RUN_SCIMILARITY:
         try:
+            # Training phase: preprocess and embed reference data
+            train_start = time.time()
             adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-            adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
-
             emb_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
-            emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
             labels_ref = adata_ref.obs[cell_type_col_local].values
+            ref_embed_time = time.time() - train_start  # Time to prepare reference embeddings
+
+            # Inference phase: preprocess and embed query data
+            infer_start = time.time()
+            adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
+            emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
+            query_embed_time = time.time() - infer_start  # Time to prepare query embeddings
 
             # Store for UMAP (only first run)
             if generate_umap and run_id == 0:
@@ -1104,11 +1233,18 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
             for clf_name, clf in classifiers.items():
                 try:
-                    start = time.time()
+                    # Training: classifier fit (add to reference embedding time)
+                    clf_train_start = time.time()
                     clf.fit(emb_ref, labels_ref)
+                    clf_train_time = time.time() - clf_train_start
+                    total_train_time = ref_embed_time + clf_train_time
+
+                    # Inference: predict + refinement (add to query embedding time)
+                    clf_infer_start = time.time()
                     pred_raw = clf.predict(emb_query)
                     pred = refine_predictions(emb_query, pred_raw, k=50)
-                    elapsed = time.time() - start
+                    clf_infer_time = time.time() - clf_infer_start
+                    total_infer_time = query_embed_time + clf_infer_time
 
                     metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
                     f1_val = compute_f1(y_true, pred)
@@ -1120,12 +1256,14 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                         'accuracy': metrics['accuracy'],
                         'ari': metrics['ari'],
                         'f1_macro': f1_val,
-                        'time_sec': elapsed,
+                        'train_time_sec': total_train_time,
+                        'inference_time_sec': total_infer_time,
+                        'time_sec': total_train_time + total_infer_time,
                         'run': run_id,
                     })
 
                     if run_id == 0:
-                        print(f"    [SCimilarity-{clf_name}] Acc: {metrics['accuracy']:.3f}, F1: {f1_val:.3f}")
+                        print(f"    [SCimilarity-{clf_name}] Acc: {metrics['accuracy']:.3f}, F1: {f1_val:.3f}, Train: {total_train_time:.1f}s, Infer: {total_infer_time:.1f}s")
 
                     # Store MLP predictions for UMAP and per-celltype analysis
                     if clf_name == 'mlp':
@@ -1150,11 +1288,18 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
             # Ensemble Soft Voting
             try:
-                start = time.time()
+                # Training: ensemble fit
+                ens_train_start = time.time()
                 ensemble = train_ensemble(emb_ref, labels_ref, 'voting_soft')
+                ens_train_time = time.time() - ens_train_start
+                total_train_time = ref_embed_time + ens_train_time
+
+                # Inference: ensemble predict + refinement
+                ens_infer_start = time.time()
                 pred_raw = predict_ensemble(ensemble, emb_query, 'voting_soft')
                 pred = refine_predictions(emb_query, pred_raw, k=50)
-                elapsed = time.time() - start
+                ens_infer_time = time.time() - ens_infer_start
+                total_infer_time = query_embed_time + ens_infer_time
 
                 metrics = compute_metrics(y_true=y_true, y_pred=pred, metrics=['accuracy', 'ari'])
                 results.append({
@@ -1164,11 +1309,13 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, pred),
-                    'time_sec': elapsed,
+                    'train_time_sec': total_train_time,
+                    'inference_time_sec': total_infer_time,
+                    'time_sec': total_train_time + total_infer_time,
                     'run': run_id,
                 })
                 if run_id == 0:
-                    print(f"    [SCimilarity-Ensemble] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}")
+                    print(f"    [SCimilarity-Ensemble] Acc: {metrics['accuracy']:.3f}, F1: {results[-1]['f1_macro']:.3f}, Train: {total_train_time:.1f}s, Infer: {total_infer_time:.1f}s")
             except Exception as e:
                 if run_id == 0:
                     print(f"    [SCimilarity-Ensemble] Error: {e}")
@@ -1259,6 +1406,9 @@ def main():
         print("\n  Creating runtime comparison boxplot...")
         plot_method_comparison_boxplot(df_results, metric='time_sec', output_dir=FIGURE_DIR)
 
+        print("\n  Creating timing breakdown plot (train vs inference)...")
+        plot_timing_breakdown(df_results, output_dir=FIGURE_DIR)
+
     # Per-cell-type F1 for SCimilarity-mlp
     if len(df_per_celltype) > 0:
         print("\n  Creating per-cell-type F1 boxplot...")
@@ -1276,12 +1426,19 @@ def main():
         return
 
     # Aggregate results by scenario and method
-    summary = df_results.groupby(['scenario', 'method']).agg({
+    agg_dict = {
         'accuracy': ['mean', 'std'],
         'f1_macro': ['mean', 'std'],
         'ari': ['mean', 'std'],
         'time_sec': ['mean', 'std'],
-    }).round(4)
+    }
+    # Add timing columns if they exist
+    if 'train_time_sec' in df_results.columns:
+        agg_dict['train_time_sec'] = ['mean', 'std']
+    if 'inference_time_sec' in df_results.columns:
+        agg_dict['inference_time_sec'] = ['mean', 'std']
+
+    summary = df_results.groupby(['scenario', 'method']).agg(agg_dict).round(4)
 
     print("\n" + summary.to_string())
 
