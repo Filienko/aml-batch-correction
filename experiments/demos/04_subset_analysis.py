@@ -10,7 +10,7 @@ This example demonstrates:
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl import Pipeline
 from sccl.data import generate_synthetic_data, subset_data
