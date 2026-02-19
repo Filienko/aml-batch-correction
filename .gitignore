@@ -8,3 +8,5 @@ data/
 *.h5ad
 model_v1.1/
 *.gz
+merlin_cxg_2023_05_15_sf-log1p_minimal/
+scTab-checkpoints/

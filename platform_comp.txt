@@ -1,0 +1,184 @@
+================================================================================
+EXPERIMENT: Same-Platform vs Cross-Platform Comparison
+================================================================================
+
+Research Question:
+  How much does platform difference affect label transfer?
+
+Comparisons:
+  1. Same-Platform: 10x → 10x
+     beneyto-calabuig-2023 (10x Genomics) → jiang_2020 (10x Genomics)
+  2. Cross-Platform: Seq-Well → 10x (jiang)
+     van_galen_2019 (Seq-Well) → jiang_2020 (10x Genomics)
+  3. Cross-Platform: Seq-Well → 10x (beneyto)
+     van_galen_2019 (Seq-Well) → beneyto-calabuig-2023 (10x Genomics)
+
+================================================================================
+1. Detecting column names...
+================================================================================
+   Using study column: 'Study'
+   Using cell type column: 'Cell Type'
+
+================================================================================
+2. Testing Transfer Scenarios
+================================================================================
+
+================================================================================
+Scenario 1/3: Same-Platform: 10x → 10x
+  Reference: beneyto-calabuig-2023 (10x Genomics)
+  Query:     jiang_2020 (10x Genomics)
+  Platform:  SAME
+================================================================================
+  Loading data...
+  Reference: 75,372 cells (subsampling to 10,000)
+  Query: 73,810 cells (subsampling to 10,000)
+  Reference: 10,000 cells, 15 types
+  Query:     10,000 cells, 15 types
+
+  SCimilarity+KNN... ✓ ARI: 0.200, Acc: 0.462
+
+  CellTypist... 
+    DEBUG - CellTypist labels:
+    Ground truth (15 unique): ['B', 'CD14+ Mono', 'CD16+ Mono', 'CMP', 'Erythroid']...
+    Predictions (7 unique): ['CD14+ Mono', 'CMP', 'Erythroid', 'HSPC', 'MEP']...
+    Overlap: 7 labels
+✓ ARI: 0.115, Acc: 0.531
+
+================================================================================
+Scenario 2/3: Cross-Platform: Seq-Well → 10x (jiang)
+  Reference: van_galen_2019 (Seq-Well)
+  Query:     jiang_2020 (10x Genomics)
+  Platform:  DIFFERENT
+================================================================================
+  Loading data...
+  Reference: 23,344 cells (subsampling to 10,000)
+  Query: 73,810 cells (subsampling to 10,000)
+  Reference: 10,000 cells, 16 types
+  Query:     10,000 cells, 15 types
+
+  SCimilarity+KNN... ✓ ARI: 0.221, Acc: 0.550
+
+  CellTypist... 
+    DEBUG - CellTypist labels:
+    Ground truth (15 unique): ['B', 'CD14+ Mono', 'CD16+ Mono', 'CMP', 'Erythroid']...
+    Predictions (10 unique): ['CD14+ Mono', 'CMP', 'Erythroid', 'GMP', 'HSPC']...
+    Overlap: 10 labels
+✓ ARI: 0.263, Acc: 0.633
+
+================================================================================
+Scenario 3/3: Cross-Platform: Seq-Well → 10x (beneyto)
+  Reference: van_galen_2019 (Seq-Well)
+  Query:     beneyto-calabuig-2023 (10x Genomics)
+  Platform:  DIFFERENT
+================================================================================
+  Loading data...
+  Reference: 23,344 cells (subsampling to 10,000)
+  Query: 75,372 cells (subsampling to 10,000)
+  Reference: 10,000 cells, 16 types
+  Query:     10,000 cells, 15 types
+
+  SCimilarity+KNN... ✓ ARI: 0.854, Acc: 0.897
+
+  CellTypist... 
+    DEBUG - CellTypist labels:
+    Ground truth (15 unique): ['B', 'CD14+ Mono', 'CD16+ Mono', 'CMP', 'Erythroid']...
+    Predictions (12 unique): ['B', 'CD14+ Mono', 'CD16+ Mono', 'Erythroid', 'HSPC']...
+    Overlap: 12 labels
+✓ ARI: 0.859, Acc: 0.909
+
+================================================================================
+RESULTS: All Transfer Scenarios
+================================================================================
+                                scenario           model platform_match      ari  accuracy
+                Same-Platform: 10x → 10x SCimilarity+KNN           SAME 0.200452    0.4616
+                Same-Platform: 10x → 10x      CellTypist           SAME 0.115295    0.5306
+  Cross-Platform: Seq-Well → 10x (jiang) SCimilarity+KNN      DIFFERENT 0.221483    0.5499
+  Cross-Platform: Seq-Well → 10x (jiang)      CellTypist      DIFFERENT 0.262579    0.6335
+Cross-Platform: Seq-Well → 10x (beneyto) SCimilarity+KNN      DIFFERENT 0.853533    0.8967
+Cross-Platform: Seq-Well → 10x (beneyto)      CellTypist      DIFFERENT 0.858719    0.9094
+
+================================================================================
+COMPARISON: Same-Platform vs Cross-Platform
+================================================================================
+
+Same-Platform Transfer (10x → 10x):
+                 accuracy    ari    nmi
+model                                  
+CellTypist         0.5306 0.1153 0.2955
+SCimilarity+KNN    0.4616 0.2005 0.2741
+
+Cross-Platform Transfer (Seq-Well → 10x):
+                 accuracy    ari    nmi
+model                                  
+CellTypist         0.7714 0.5606 0.5972
+SCimilarity+KNN    0.7233 0.5375 0.5628
+
+Platform Effect (Cross - Same):
+                 accuracy     ari     nmi
+model                                    
+CellTypist        +0.2409 +0.4454 +0.3017
+SCimilarity+KNN   +0.2617 +0.3371 +0.2887
+
+================================================================================
+Performance by Scenario and Model
+================================================================================
+
+ARI by Scenario:
+model                                     CellTypist  SCimilarity+KNN
+scenario                                                             
+Cross-Platform: Seq-Well → 10x (beneyto)       0.859            0.854
+Cross-Platform: Seq-Well → 10x (jiang)         0.263            0.221
+Same-Platform: 10x → 10x                       0.115            0.200
+
+================================================================================
+3. Saving results...
+================================================================================
+   ✓ /home/daniilf/aml-batch-correction/experiments/paper/results/exp_platform_comparison.csv
+
+================================================================================
+CONCLUSION
+================================================================================
+
+Best Same-Platform Transfer:
+  Model: SCimilarity+KNN
+  ARI: 0.2005
+  Accuracy: 0.4616
+
+Best Cross-Platform Transfer:
+  Model: CellTypist
+  Scenario: Cross-Platform: Seq-Well → 10x (beneyto)
+  ARI: 0.8587
+  Accuracy: 0.9094
+
+================================================================================
+PLATFORM EFFECT ANALYSIS (SCimilarity+KNN)
+================================================================================
+  Same-Platform ARI:  0.2005
+  Cross-Platform ARI: 0.5375
+  Platform Penalty:   -0.3371 ARI
+  Relative Impact:    -168.1%
+
+✅ SMALL platform effect: Model robust to platform differences
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+This experiment isolates the effect of sequencing platform on label transfer:
+
+Same-Platform (10x → 10x):
+  - Baseline performance without platform batch effect
+  - Only biological/study-specific variation
+
+Cross-Platform (Seq-Well → 10x):
+  - Tests robustness to technical platform differences
+  - Combines platform + biological variation
+
+Platform Effect = Cross-Platform ARI - Same-Platform ARI
+  - Negative = Platform hurts performance
+  - ~0 = Model corrects platform differences
+  - Positive = Unexpected (check data quality)
+
+Use this to quantify how much platform matters vs other batch effects.
+    
+================================================================================
