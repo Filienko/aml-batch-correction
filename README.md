@@ -143,17 +143,64 @@ sccl compare --data data.h5ad --models random_forest,svm,scimilarity --target ce
 
 ### Python API
 
+SCimilarity works in two explicit stages: (1) project cells into a latent embedding space, then (2) train a separate sklearn classifier on those embeddings and apply it to new data. There is no single black-box `.predict()` — the experiment script (`exp_ensemble_embeddings.py`) uses it exactly like this:
+
 ```python
-from sccl import Pipeline
 import scanpy as sc
+from sklearn.neural_network import MLPClassifier
+from sklearn.neighbors import NearestNeighbors
+from collections import Counter
+import numpy as np
 
-adata = sc.read_h5ad("your_data.h5ad")
+from sccl import Pipeline
+from sccl.data import preprocess_data
 
-pipeline = Pipeline(model="scimilarity")
-predictions = pipeline.predict(adata)
+# Load separate reference (train) and query (test) datasets
+adata_ref = sc.read_h5ad("reference.h5ad")
+adata_query = sc.read_h5ad("query.h5ad")
 
-metrics = pipeline.evaluate(adata, target_column="cell_type", test_size=0.2)
-print(f"Accuracy: {metrics['accuracy']:.3f}, ARI: {metrics['ari']:.3f}")
+# Step 1: Preprocess — stores raw counts in adata.raw, then normalizes/scales/PCA .X
+# get_embedding() reads from adata.raw when available, so this ensures it gets
+# true raw counts regardless of what is in .X. If your .X is already raw counts,
+# you can skip this and pass the AnnData directly.
+adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
+adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
+
+# Step 2: Extract SCimilarity embeddings.
+# get_embedding() handles all scimilarity-specific preprocessing internally:
+# gene alignment (align_dataset) and normalization (lognorm_counts).
+# It does NOT use the HVG/PCA in .X — it reads raw counts from .raw.
+pipeline = Pipeline(model='scimilarity', model_params={'model_path': 'path/to/model'})
+emb_ref   = pipeline.model.get_embedding(adata_ref_prep)   # (n_ref_cells, latent_dim)
+emb_query = pipeline.model.get_embedding(adata_query_prep) # (n_query_cells, latent_dim)
+
+# Step 3: Train any sklearn classifier on reference embeddings
+clf = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=300, alpha=0.001, random_state=42)
+clf.fit(emb_ref, adata_ref.obs['cell_type'].values)
+
+# Step 4: Predict on query embeddings
+predictions = clf.predict(emb_query)
+
+# Optional Step 5: Refine with k-NN majority vote over query neighbours
+nn = NearestNeighbors(n_neighbors=50, n_jobs=-1).fit(emb_query)
+neighbour_idx = nn.kneighbors(emb_query, return_distance=False)
+predictions = np.array([
+    Counter(predictions[idx]).most_common(1)[0][0]
+    for idx in neighbour_idx
+])
+```
+
+If you want the embedding + classifier steps bundled together, `SCimilarityModel` (used internally by `Pipeline`) exposes a `fit` / `predict` interface that wraps the same flow:
+
+```python
+# Equivalent using the built-in SCimilarityModel wrapper
+pipeline = Pipeline(model='scimilarity', model_params={
+    'model_path': 'path/to/model',
+    'classifier': 'mlp',        # knn | logistic_regression | random_forest | mlp
+    'label_propagation': True,  # enables the k-NN majority-vote refinement step
+})
+pipeline.model.fit(adata_ref, target_column='cell_type')  # embeds ref + fits clf
+predictions = pipeline.model.predict(adata_query)          # embeds query + predicts
 ```
 
 ### Label Transfer (Cross-Study)
