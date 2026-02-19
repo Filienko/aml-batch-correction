@@ -100,7 +100,7 @@ AML_SCENARIOS = [
         'query': 'beneyto-calabuig-2023',
     },
     {
-        'name': 'Same-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
+        'name': 'Cross-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
         'reference': 'van_galen_2019',
         'query': 'zhai_2022',
     },
@@ -117,7 +117,7 @@ ZHENG_SCENARIOS = [
 ]
 
 # Combine all scenarios (AML uses 'reference'/'query' study names, Zheng uses file paths)
-SCENARIOS = AML_SCENARIOS + ZHENG_SCENARIOS
+SCENARIOS = ZHENG_SCENARIOS
 
 # Which methods to run (set to False to skip)
 RUN_CELLTYPIST = True
