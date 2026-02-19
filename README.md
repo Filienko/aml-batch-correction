@@ -14,6 +14,13 @@ SCCL provides a unified pipeline for:
 
 ## 🚀 Quick Start
 
+
+## DATASET
+
+To download the dataset:
+
+bash XXX.sh
+
 **New to SCCL?** Start here: **[QUICKSTART.md](QUICKSTART.md)** - Step-by-step guide with complete examples.
 
 **Quick examples:**
@@ -416,3 +423,4 @@ MIT License - See LICENSE file for details.
 - 📖 Check this README for usage
 - 💡 See `experiments/demos/` for examples
 - 🐛 Report issues: https://github.com/Filienko/aml-batch-correction/issues
+
