@@ -119,7 +119,7 @@ RUN_SINGLER = True
 RUN_SCTAB = True
 
 # Number of runs for statistical analysis (box-whisker plots)
-N_RUNS = 1
+N_RUNS = 5
 
 # Figure output directory
 FIGURE_DIR = OUTPUT_DIR / "figures"
