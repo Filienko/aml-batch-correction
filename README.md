@@ -145,14 +145,12 @@ python experiments/demos/01_basic_prediction.py
 > For the actual research workflow, run `experiments/paper/exp_ensemble_embeddings.py` directly.
 
 ```bash
-# Safe to use: generate synthetic data for testing
+# Generate synthetic data — produces Gene_1/Gene_2/CellType_1/CellType_2 placeholders.
+# Useful only for checking that pipeline code runs end-to-end without crashing.
+# NOT useful for validating SCimilarity or any real model:
+#   - gene names (Gene_1 … Gene_N) won't match any model's gene vocabulary → zero-overlap embeddings
+#   - labels (CellType_1 …) are not real cell ontology terms
 sccl generate --output test_data.h5ad --n-cells 2000 --n-cell-types 5
-
-# SCimilarity predict works (has within-data KNN fallback even without fit())
-sccl predict --data data.h5ad --model scimilarity --output predictions.csv
-
-# evaluate works for a quick sanity check but is NOT cross-study evaluation
-sccl evaluate --data data.h5ad --model scimilarity --target cell_type --test-size 0.2
 ```
 
 ### Python API
