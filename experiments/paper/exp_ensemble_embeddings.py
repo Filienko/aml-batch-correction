@@ -66,16 +66,8 @@ BENCHMARK_DATA_DIR = Path(__file__).parent / "benchmark_data"
 SCTAB_CHECKPOINT = Path("scTab-checkpoints/scTab/run5/val_f1_macro_epoch=41_val_f1_macro=0.847.ckpt")
 MERLIN_DIR = Path("merlin_cxg_2023_05_15_sf-log1p_minimal")
 
-# Set to None to use full data
+# Set to None to use full data. Currently setup to 15k because of memory requirements
 MAX_CELLS_PER_STUDY = 15000
-
-SCENARIOS_SHORT = [
-    {
-        'name': 'Cross-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
-        'reference': 'van_galen_2019',
-        'query': 'zhai_2022',
-    },
-]
 
 # AML Atlas scenarios (subset from single file)
 AML_SCENARIOS = [
@@ -117,7 +109,8 @@ ZHENG_SCENARIOS = [
 ]
 
 # Combine all scenarios (AML uses 'reference'/'query' study names, Zheng uses file paths)
-SCENARIOS = ZHENG_SCENARIOS
+SCENARIOS = ZHENG_SCENARIOS + AML_SCENARIOS
+
 
 # Which methods to run (set to False to skip)
 RUN_CELLTYPIST = True
@@ -126,7 +119,7 @@ RUN_SINGLER = True
 RUN_SCTAB = True
 
 # Number of runs for statistical analysis (box-whisker plots)
-N_RUNS = 5
+N_RUNS = 1
 
 # Figure output directory
 FIGURE_DIR = OUTPUT_DIR / "figures"
@@ -203,15 +196,13 @@ def predict_ensemble(ensemble, embeddings_query, ensemble_type='voting'):
 # VISUALIZATION FUNCTIONS
 # ==============================================================================
 
-def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
+def plot_umap_comparison(embeddings_query, y_true, y_pred,
                          method_name, scenario_name, output_dir):
     """
     Create UMAP visualization comparing ground truth vs predicted cell types.
 
     Parameters
     ----------
-    adata_query : AnnData
-        Query data
     embeddings_query : np.ndarray
         SCimilarity embeddings for query cells
     y_true : np.ndarray
@@ -225,7 +216,6 @@ def plot_umap_comparison(adata_query, embeddings_query, y_true, y_pred,
     output_dir : Path
         Output directory for figures
     """
-    from sklearn.manifold import TSNE
     import umap
 
     # Filter out NaN labels for visualization
@@ -900,9 +890,13 @@ def preprocess_zheng_data(adata):
                 # Check if labels are integers
                 if np.issubdtype(labels.dtype, np.integer):
                     print(f"    Converting integer labels to cell type names...")
-                    # Map integer indices to string names
-                    string_labels = [cell_type_names[i] if i < len(cell_type_names) else f'Unknown_{i}'
-                                    for i in labels]
+                    # Normalize to 0-based indices in case labels start at 1 or another offset
+                    offset = int(labels.min())
+                    string_labels = [
+                        cell_type_names[i - offset] if 0 <= (i - offset) < len(cell_type_names)
+                        else f'Unknown_{i}'
+                        for i in labels
+                    ]
                     adata.obs[col] = string_labels
                 break
 
@@ -1041,8 +1035,19 @@ SCTAB_LABEL_MAP = {
 }
 
 
+def _normalize_for_fuzzy(label):
+    """Strip non-alphanumeric characters and lowercase for fuzzy comparison."""
+    import re
+    return re.sub(r'[^a-z0-9]', '', label.lower())
+
+
 def harmonize_sctab_labels(predictions, ground_truth_labels=None):
-    """Harmonize scTab Cell Ontology labels to match ground truth vocabulary."""
+    """Harmonize scTab Cell Ontology labels to match ground truth vocabulary.
+
+    First applies SCTAB_LABEL_MAP for exact Cell Ontology → short-code mapping,
+    then attempts fuzzy substring matching (normalized, alphanumeric only) against
+    the ground truth label set for any remaining unmapped labels.
+    """
     predictions = np.asarray(predictions)
     harmonized = predictions.copy()
 
@@ -1052,25 +1057,26 @@ def harmonize_sctab_labels(predictions, ground_truth_labels=None):
 
     # Fuzzy matching for unmapped labels
     if ground_truth_labels is not None:
-        # Convert ground truth to strings for comparison
         gt_valid = ground_truth_labels[pd.notna(ground_truth_labels)]
         gt_labels_set = set([str(x) for x in np.unique(gt_valid)])
         unmapped = set(np.unique(harmonized)) - gt_labels_set
 
+        # Pre-compute normalized versions of ground truth labels
+        gt_normalized = {_normalize_for_fuzzy(gt): gt for gt in gt_labels_set}
+
         for pred_label in unmapped:
-            # Ensure pred_label is string
             if not isinstance(pred_label, str):
                 continue
-            pred_lower = pred_label.lower()
-            for gt_label in gt_labels_set:
-                # Ensure gt_label is string
-                if not isinstance(gt_label, str):
-                    continue
-                gt_lower = gt_label.lower()
-                if gt_lower in pred_lower or pred_lower in gt_lower:
-                    mask = harmonized == pred_label
-                    harmonized[mask] = gt_label
+            pred_norm = _normalize_for_fuzzy(pred_label)
+            matched_gt = None
+            for gt_norm, gt_label in gt_normalized.items():
+                # Match if one normalized form is a substring of the other
+                if gt_norm in pred_norm or pred_norm in gt_norm:
+                    matched_gt = gt_label
                     break
+            if matched_gt is not None:
+                mask = harmonized == pred_label
+                harmonized[mask] = matched_gt
 
     return harmonized
 
@@ -1273,11 +1279,18 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
         adata_query = preprocess_zheng_data(adata_query)
 
         # Auto-detect cell type column for Zheng data
-        cell_type_col_local = cell_type_col
+        cell_type_col_local = None
         for col in ['cell_type_label', 'cell_type', 'celltype', 'Cell Type', 'label', 'labels', 'cell_label']:
             if col in adata_ref.obs.columns:
                 cell_type_col_local = col
                 break
+        if cell_type_col_local is None:
+            available = list(adata_ref.obs.columns)
+            raise ValueError(
+                f"Cannot find a cell type column in Zheng reference data. "
+                f"Tried: {['cell_type_label','cell_type','celltype','Cell Type','label','labels','cell_label']}. "
+                f"Available columns: {available}"
+            )
     else:
         # AML-style: subset from single file using study names
         adata_ref = subset_data(adata, studies=[scenario['reference']]).to_memory()
@@ -1417,23 +1430,28 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
     # =========================================================================
     # Method 4: SCimilarity + Classifiers
-    # Training time = reference preprocessing + reference embedding + classifier fit
-    # Inference time = query preprocessing + query embedding + classifier predict + refinement
+    # Timing semantics: each SCimilarity-{clf} row reports the *full* cost of
+    # deploying that specific variant from scratch:
+    #   train_time_sec    = ref_embed_time   + clf_fit_time
+    #   inference_time_sec = query_embed_time + clf_predict_time + refinement_time
+    # ref_embed_time and query_embed_time are shared across all classifiers but
+    # are included in each row because any single deployment would pay this cost.
+    # This gives a fair comparison vs other methods on a per-method basis.
     # =========================================================================
     if RUN_SCIMILARITY:
         try:
-            # Training phase: preprocess and embed reference data
+            # Training phase: preprocess and embed reference data (paid once per run)
             train_start = time.time()
             adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
             emb_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
             labels_ref = adata_ref.obs[cell_type_col_local].values
-            ref_embed_time = time.time() - train_start  # Time to prepare reference embeddings
+            ref_embed_time = time.time() - train_start
 
-            # Inference phase: preprocess and embed query data
+            # Inference phase: preprocess and embed query data (paid once per run)
             infer_start = time.time()
             adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
             emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
-            query_embed_time = time.time() - infer_start  # Time to prepare query embeddings
+            query_embed_time = time.time() - infer_start
 
             # Store for UMAP (only first run)
             if generate_umap and run_id == 0:
@@ -1562,10 +1580,15 @@ def main():
     all_results = []
     all_per_celltype = []
 
-    print("\nLoading data...")
-    adata = sc.read_h5ad(DATA_PATH, backed='r')
-    study_col = get_study_column(adata)
-    cell_type_col = get_cell_type_column(adata)
+    # Only load the AML atlas if there are AML-style (non-separate_files) scenarios.
+    # Zheng-style scenarios load their own files inside run_single_experiment.
+    aml_scenarios = [s for s in SCENARIOS if s.get('type') != 'separate_files']
+    adata = study_col = cell_type_col = None
+    if aml_scenarios:
+        print("\nLoading AML atlas data...")
+        adata = sc.read_h5ad(DATA_PATH, backed='r')
+        study_col = get_study_column(adata)
+        cell_type_col = get_cell_type_column(adata)
 
     for scenario in SCENARIOS:
         print(f"\n{'=' * 80}")
@@ -1590,7 +1613,6 @@ def main():
             if generate_umap and emb_query is not None and mlp_pred is not None:
                 try:
                     plot_umap_comparison(
-                        adata_query=None,
                         embeddings_query=emb_query,
                         y_true=y_true,
                         y_pred=mlp_pred,
@@ -1681,3 +1703,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
