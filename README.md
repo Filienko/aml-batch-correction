@@ -135,10 +135,24 @@ python experiments/demos/01_basic_prediction.py
 
 ### Command Line
 
+> **Note:** The CLI is a lightweight prototype for quick exploration. It does **not** replicate the methodology of `exp_ensemble_embeddings.py`. Specific limitations:
+> - `sccl predict --model random_forest` will crash — RF/SVM/LR have no built-in training fallback; the pipeline calls `predict()` without a prior `fit()`.
+> - `sccl evaluate` does a random within-file train/test split, not cross-study label transfer (separate reference / query datasets).
+> - Train and test sets are preprocessed independently, meaning HVG selection can differ between them — this causes a feature-dimension mismatch for any sklearn model that operates in gene space.
+> - No k-NN neighbour refinement step.
+> - No classifier choice for SCimilarity (locked to KNN); no ensemble.
+>
+> For the actual research workflow, run `experiments/paper/exp_ensemble_embeddings.py` directly.
+
 ```bash
-sccl predict --data data.h5ad --model random_forest --target cell_type
+# Safe to use: generate synthetic data for testing
+sccl generate --output test_data.h5ad --n-cells 2000 --n-cell-types 5
+
+# SCimilarity predict works (has within-data KNN fallback even without fit())
+sccl predict --data data.h5ad --model scimilarity --output predictions.csv
+
+# evaluate works for a quick sanity check but is NOT cross-study evaluation
 sccl evaluate --data data.h5ad --model scimilarity --target cell_type --test-size 0.2
-sccl compare --data data.h5ad --models random_forest,svm,scimilarity --target cell_type
 ```
 
 ### Python API
