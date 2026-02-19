@@ -134,7 +134,7 @@ python experiments/demos/01_basic_prediction.py
 ## Usage
 
 ### Command Line
-TODO: replicate full functionality of the python API. 
+TODO: replicate full functionality of the python API with CLI. Currently is not fully implemented.
 
 ```bash
 sccl evaluate --data data.h5ad --model scimilarity --target cell_type --test-size 0.2
