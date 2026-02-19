@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-Standalone scTab Evaluation Script (Minimal Dependencies)
-=========================================================
-Test scTab foundation model on a single reference/query study pair.
+Standalone scTab Evaluation Script
+====================================
+Test scTab zero-shot foundation model on multiple reference/query study pairs.
 
-This version uses h5py to read h5ad files directly, avoiding scanpy/anndata
-dependency conflicts.
+scTab is a PRE-TRAINED foundation model - it does NOT require reference data.
+The "reference" study is included only to match the evaluation protocol of
+reference-based methods.
 
 Following official scTab inference steps from:
 https://github.com/theislab/scTab
 
 Phase 1: Data Preprocessing
-    - Raw count data required (no normalization) - use .raw.X from h5ad
+    - Raw count data required (no normalization) - use .raw.X from anndata
     - Align gene feature space to model's var.parquet order
     - Zero-fill missing genes
-    - Note: Data should use same Ensembl release as model (release 104)
 
 Phase 2: Load Trained Model
     - Load checkpoint via torch.load()
     - Load architecture from hparams.yaml
     - Initialize TabNet and load weights
-    - Set model to eval mode
 
 Phase 3: Run Model Inference
     - Apply sf-log1p normalization (scale to 10k + log1p)
@@ -32,12 +31,8 @@ Usage:
 
 Requirements:
     - cellnet package: pip install git+https://github.com/theislab/scTab.git
-    - h5py, numpy, pandas, torch, pyyaml, scipy, scikit-learn, tqdm
-    - scTab checkpoint files
-    - merlin model directory with:
-        - var.parquet (gene order)
-        - categorical_lookup/cell_type.parquet (label mapping)
-        - hparams.yaml (in checkpoint parent dir)
+    - scanpy, numpy, pandas, torch, pyyaml, scipy, scikit-learn, tqdm
+    - scTab checkpoint files and merlin model directory
 """
 
 import sys
@@ -46,640 +41,73 @@ import time
 from pathlib import Path
 from collections import OrderedDict
 
-import h5py
 import numpy as np
 import pandas as pd
+import scanpy as sc
 import torch
 import yaml
-from scipy.sparse import csc_matrix, csr_matrix
-from sklearn.metrics import (
-    accuracy_score,
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-    classification_report,
-    f1_score,
-)
+from scipy.sparse import csc_matrix
+from sklearn.metrics import accuracy_score, adjusted_rand_score, f1_score, classification_report
 from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from sccl.data import subset_data, get_study_column, get_cell_type_column
+
 # ==============================================================================
-# CONFIGURATION
+# CONFIGURATION  (matches exp_ensemble_embeddings.py)
 # ==============================================================================
 
-# Paths - adjust these to your setup
 DATA_PATH = Path("/home/daniilf/full_aml_tasks/batch_correction/data/AML_scAtlas.h5ad")
 
-# scTab model paths
 SCTAB_CHECKPOINT = Path("scTab-checkpoints/scTab/run5/val_f1_macro_epoch=41_val_f1_macro=0.847.ckpt")
 MERLIN_DIR = Path("merlin_cxg_2023_05_15_sf-log1p_minimal")
 
-# Multi-scenario configuration (same as SingleR for fair comparison)
-# Note: scTab is a zero-shot model, so reference is not used during inference.
-# We include reference info to match the evaluation protocol of reference-based methods.
+MAX_CELLS_PER_STUDY = 15000
+BATCH_SIZE = 2048
+
 SCENARIOS = [
     {
-        'name': 'Same-Platform: Beneyto (10X) -> Zhang (10X)',
+        'name': 'Same-Platform: beneyto (10X Genomics) → Zhang (10X Genomics)',
         'reference': 'beneyto-calabuig-2023',
         'query': 'zhang_2023',
     },
     {
-        'name': 'Cross-Platform: Zhai (SORT-seq) -> Zhang (10X)',
+        'name': 'Cross-Platform: Zhai (SORT-seq) → Zhang (10X Genomics)',
         'reference': 'zhai_2022',
         'query': 'zhang_2023',
     },
     {
-        'name': 'Cross-Platform: Van Galen (Seq-Well) -> Velten (Muta-Seq)',
+        'name': 'Cross-Platform: van_galen (Seq-Well) → velten (Muta-Seq)',
         'reference': 'van_galen_2019',
         'query': 'velten_2021',
     },
     {
-        'name': 'Cross-Platform: Van Galen (Seq-Well) -> Beneyto (10X)',
+        'name': 'Cross-Platform: van_galen (Seq-Well) → beneyto (10X Genomics)',
         'reference': 'van_galen_2019',
         'query': 'beneyto-calabuig-2023',
     },
+    {
+        'name': 'Same-Platform: van_galen (Seq-Well) -> Zhai (SORT-seq)',
+        'reference': 'van_galen_2019',
+        'query': 'zhai_2022',
+    },
 ]
 
-# Subsampling for computational efficiency
-MAX_CELLS = 10000
-BATCH_SIZE = 2048
-
-# Output
 OUTPUT_DIR = Path(__file__).parent / "results"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 # ==============================================================================
-# H5AD DATA LOADING (without scanpy/anndata)
+# SCTAB UTILITIES
 # ==============================================================================
 
-class H5ADReader:
-    """Minimal h5ad reader using h5py directly."""
-
-    def __init__(self, filepath):
-        self.filepath = Path(filepath)
-        self._file = None
-
-    def __enter__(self):
-        self._file = h5py.File(self.filepath, 'r')
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._file:
-            self._file.close()
-
-    def get_obs(self):
-        """Read obs (cell metadata) as DataFrame."""
-        obs = self._file['obs']
-
-        # Handle different h5ad formats
-        if isinstance(obs, h5py.Dataset):
-            # Structured array format
-            return pd.DataFrame(obs[()])
-        else:
-            # Group format (newer anndata)
-            data = {}
-            index = None
-
-            # Get index
-            if '_index' in obs:
-                index = obs['_index'][()].astype(str)
-            elif '__categories' in obs:
-                # Handle categorical index
-                pass
-
-            # Get columns
-            for key in obs.keys():
-                if key.startswith('_') or key == '__categories':
-                    continue
-                try:
-                    col_data = obs[key]
-                    if isinstance(col_data, h5py.Group):
-                        # Categorical data
-                        if 'categories' in col_data and 'codes' in col_data:
-                            categories = col_data['categories'][()].astype(str)
-                            codes = col_data['codes'][()]
-                            # Map codes to categories
-                            data[key] = categories[codes]
-                        else:
-                            continue
-                    else:
-                        arr = col_data[()]
-                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
-                            arr = arr.astype(str)
-                        data[key] = arr
-                except Exception as e:
-                    print(f"  Warning: Could not read obs column '{key}': {e}")
-                    continue
-
-            df = pd.DataFrame(data)
-            if index is not None and len(index) == len(df):
-                df.index = index
-            return df
-
-    def get_var(self, use_raw=True):
-        """Read var (gene metadata) as DataFrame."""
-        if use_raw and 'raw' in self._file and 'var' in self._file['raw']:
-            var = self._file['raw']['var']
-        else:
-            var = self._file['var']
-
-        # Handle different formats
-        if isinstance(var, h5py.Dataset):
-            return pd.DataFrame(var[()])
-        else:
-            data = {}
-            index = None
-
-            if '_index' in var:
-                index = var['_index'][()].astype(str)
-
-            for key in var.keys():
-                if key.startswith('_'):
-                    continue
-                try:
-                    col_data = var[key]
-                    if isinstance(col_data, h5py.Group):
-                        if 'categories' in col_data and 'codes' in col_data:
-                            categories = col_data['categories'][()].astype(str)
-                            codes = col_data['codes'][()]
-                            data[key] = categories[codes]
-                    else:
-                        arr = col_data[()]
-                        if arr.dtype.kind == 'S' or arr.dtype.kind == 'O':
-                            arr = arr.astype(str)
-                        data[key] = arr
-                except Exception as e:
-                    print(f"  Warning: Could not read var column '{key}': {e}")
-                    continue
-
-            df = pd.DataFrame(data)
-            if index is not None and len(index) == len(df):
-                df.index = index
-            return df
-
-    def get_X(self, use_raw=True, cell_indices=None):
-        """Read X matrix (optionally from raw)."""
-        if use_raw and 'raw' in self._file and 'X' in self._file['raw']:
-            X_group = self._file['raw']['X']
-        else:
-            X_group = self._file['X']
-
-        # Check if sparse
-        if isinstance(X_group, h5py.Group):
-            # Sparse matrix
-            data = X_group['data'][()]
-            indices = X_group['indices'][()]
-            indptr = X_group['indptr'][()]
-
-            # Determine shape
-            if 'shape' in X_group.attrs:
-                shape = tuple(X_group.attrs['shape'])
-            else:
-                # Infer shape
-                n_rows = len(indptr) - 1
-                n_cols = indices.max() + 1 if len(indices) > 0 else 0
-                shape = (n_rows, n_cols)
-
-            # Create sparse matrix (CSR format is typical for h5ad)
-            X = csr_matrix((data, indices, indptr), shape=shape)
-
-            if cell_indices is not None:
-                X = X[cell_indices]
-
-            return X
-        else:
-            # Dense matrix
-            if cell_indices is not None:
-                return X_group[cell_indices]
-            return X_group[()]
-
-    def get_n_obs(self):
-        """Get number of cells."""
-        if 'obs' in self._file:
-            obs = self._file['obs']
-            if isinstance(obs, h5py.Dataset):
-                return len(obs)
-            elif '_index' in obs:
-                return len(obs['_index'])
-            else:
-                # Try to infer from first column
-                for key in obs.keys():
-                    if not key.startswith('_'):
-                        return len(obs[key])
-        return 0
-
-    def get_n_vars(self, use_raw=True):
-        """Get number of genes."""
-        if use_raw and 'raw' in self._file and 'var' in self._file['raw']:
-            var = self._file['raw']['var']
-        else:
-            var = self._file['var']
-
-        if isinstance(var, h5py.Dataset):
-            return len(var)
-        elif '_index' in var:
-            return len(var['_index'])
-        return 0
-
-
-def load_h5ad_data(filepath, study_col, cell_type_col, study_name, max_cells=None, use_raw=True):
-    """
-    Load data for a specific study from h5ad file.
-
-    Parameters
-    ----------
-    filepath : str or Path
-        Path to h5ad file
-    study_col : str
-        Column name for study/batch
-    cell_type_col : str
-        Column name for cell type labels
-    study_name : str
-        Name of study to extract
-    max_cells : int, optional
-        Maximum number of cells to return
-    use_raw : bool
-        Whether to use raw counts (recommended for scTab)
-
-    Returns
-    -------
-    X : sparse matrix
-        Count matrix (cells x genes)
-    obs : DataFrame
-        Cell metadata
-    var : DataFrame
-        Gene metadata
-    """
-    with H5ADReader(filepath) as reader:
-        print(f"  Reading obs...")
-        obs = reader.get_obs()
-
-        # Filter to study
-        if study_col not in obs.columns:
-            raise ValueError(f"Study column '{study_col}' not found. Available: {obs.columns.tolist()}")
-
-        mask = obs[study_col] == study_name
-        indices = np.where(mask)[0]
-
-        if len(indices) == 0:
-            raise ValueError(f"No cells found for study '{study_name}'")
-
-        # Subsample if needed
-        if max_cells and len(indices) > max_cells:
-            np.random.seed(42)
-            indices = np.random.choice(indices, max_cells, replace=False)
-            indices = np.sort(indices)
-
-        print(f"  Reading var...")
-        var = reader.get_var(use_raw=use_raw)
-
-        print(f"  Reading X matrix for {len(indices)} cells...")
-        X = reader.get_X(use_raw=use_raw, cell_indices=indices)
-
-        # Filter obs to selected indices
-        obs = obs.iloc[indices].reset_index(drop=True)
-
-        return X, obs, var
-
-
-def detect_columns(filepath):
-    """Auto-detect study and cell type columns from h5ad file."""
-    study_candidates = ['study', 'Study', 'dataset', 'batch', 'sample', 'Batch']
-    cell_type_candidates = ['cell_type', 'Cell Type', 'celltype', 'cell_label',
-                            'annotation', 'Annotation', 'CellType']
-
-    with H5ADReader(filepath) as reader:
-        obs = reader.get_obs()
-        columns = obs.columns.tolist()
-
-    study_col = next((c for c in study_candidates if c in columns), None)
-    cell_type_col = next((c for c in cell_type_candidates if c in columns), None)
-
-    return study_col, cell_type_col, columns
-
-
-def list_studies(filepath, study_col):
-    """List available studies in the h5ad file."""
-    with H5ADReader(filepath) as reader:
-        obs = reader.get_obs()
-        return obs[study_col].unique().tolist()
-
-
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
-
-def sf_log1p_norm(x):
-    """Normalize each cell to have 10000 counts and apply log(x+1) transform."""
-    counts = torch.sum(x, dim=1, keepdim=True)
-    counts += counts == 0.  # Avoid zero division
-    scaling_factor = 10000. / counts
-    return torch.log1p(scaling_factor * x)
-
-
-def streamline_count_matrix(X, gene_names, model_gene_names, use_cellnet=True):
-    """
-    Align gene space to match model's expected gene order.
-
-    Following scTab official steps:
-    - Order of columns in count matrix given by var.parquet
-    - Genes must be in exactly same order
-    - Zero-fill genes if missing in supplied data
-
-    Parameters
-    ----------
-    X : sparse matrix (csc format preferred for column slicing)
-        Count matrix (cells x genes)
-    gene_names : array-like
-        Gene names in the input data
-    model_gene_names : array-like
-        Gene names expected by the model (in correct order from var.parquet)
-    use_cellnet : bool
-        Try to use cellnet's streamline_count_matrix if available
-
-    Returns
-    -------
-    aligned_matrix : np.ndarray
-        Matrix with genes reordered to match model (zero-filled for missing genes)
-    """
-    # Try to use cellnet's implementation first
-    if use_cellnet:
-        try:
-            from cellnet.utils.data_loading import streamline_count_matrix as cellnet_streamline
-            print("  Using cellnet.utils.data_loading.streamline_count_matrix")
-            X_csc = csc_matrix(X) if not isinstance(X, csc_matrix) else X
-            return cellnet_streamline(X_csc, gene_names, model_gene_names)
-        except ImportError:
-            print("  cellnet not available, using manual implementation")
-
-    # Manual implementation (fallback)
-    gene_names = np.asarray(gene_names)
-    model_gene_names = np.asarray(model_gene_names)
-
-    # Create lookup for input genes
-    gene_to_idx = {g: i for i, g in enumerate(gene_names)}
-
-    # Find which model genes are in our data
-    n_cells = X.shape[0]
-    n_model_genes = len(model_gene_names)
-
-    # Create aligned matrix (zeros for missing genes)
-    aligned = np.zeros((n_cells, n_model_genes), dtype=np.float32)
-
-    # Convert to array for column access
-    if hasattr(X, 'toarray'):
-        X_dense = X.toarray()
-    else:
-        X_dense = np.asarray(X)
-
-    # Fill in genes that exist in both (in model's expected order)
-    found_genes = 0
-    for i, gene in enumerate(model_gene_names):
-        if gene in gene_to_idx:
-            aligned[:, i] = X_dense[:, gene_to_idx[gene]]
-            found_genes += 1
-
-    print(f"  Gene overlap: {found_genes}/{len(model_gene_names)} model genes found in data")
-
-    return aligned
-
-
-# ==============================================================================
-# SCTAB MODEL
-# ==============================================================================
-
-class ScTabInference:
-    """scTab model wrapper for inference."""
-
-    def __init__(self, checkpoint_path, merlin_dir, batch_size=2048):
-        self.checkpoint_path = Path(checkpoint_path)
-        self.merlin_dir = Path(merlin_dir)
-        self.batch_size = batch_size
-
-        self.model = None
-        self.genes_from_model = None
-        self.cell_type_mapping = None
-        self.model_params = None
-        self.device = None
-
-        self._load_metadata()
-
-    def _load_metadata(self):
-        """Load gene ordering and cell type mapping."""
-        print("\nLoading scTab model metadata...")
-
-        # Load gene order
-        var_path = self.merlin_dir / "var.parquet"
-        self.genes_from_model = pd.read_parquet(var_path)
-        print(f"  Loaded {len(self.genes_from_model)} genes from model")
-
-        # Load cell type mapping
-        cell_type_path = self.merlin_dir / "categorical_lookup" / "cell_type.parquet"
-        self.cell_type_mapping = pd.read_parquet(cell_type_path)
-        print(f"  Loaded {len(self.cell_type_mapping)} cell type labels")
-
-        # Load model hyperparameters
-        hparams_path = self.checkpoint_path.parent / "hparams.yaml"
-        with open(hparams_path) as f:
-            self.model_params = yaml.full_load(f.read())
-        print(f"  Loaded model hyperparameters")
-
-    def _load_model(self):
-        """Load TabNet model from checkpoint."""
-        if self.model is not None:
-            return self.model
-
-        print("\nLoading scTab model from checkpoint...")
-
-        # Load checkpoint (weights_only=False needed for PyTorch 2.6+ as checkpoint contains optimizer state)
-        if torch.cuda.is_available():
-            ckpt = torch.load(self.checkpoint_path, weights_only=False)
-            self.device = 'cuda'
-        else:
-            ckpt = torch.load(self.checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
-            self.device = 'cpu'
-
-        print(f"  Using device: {self.device}")
-
-        # Extract TabNet weights
-        tabnet_weights = OrderedDict()
-        for name, weight in ckpt['state_dict'].items():
-            if 'classifier.' in name:
-                tabnet_weights[name.replace('classifier.', '')] = weight
-
-        # Import TabNet
-        from cellnet.tabnet.tab_network import TabNet
-
-        # Initialize model
-        model = TabNet(
-            input_dim=self.model_params['gene_dim'],
-            output_dim=self.model_params['type_dim'],
-            n_d=self.model_params['n_d'],
-            n_a=self.model_params['n_a'],
-            n_steps=self.model_params['n_steps'],
-            gamma=self.model_params['gamma'],
-            n_independent=self.model_params['n_independent'],
-            n_shared=self.model_params['n_shared'],
-            epsilon=self.model_params['epsilon'],
-            virtual_batch_size=self.model_params['virtual_batch_size'],
-            momentum=self.model_params['momentum'],
-            mask_type=self.model_params['mask_type'],
-        )
-
-        # Load weights
-        model.load_state_dict(tabnet_weights)
-        model.eval()
-
-        if self.device == 'cuda':
-            model = model.cuda()
-
-        self.model = model
-        print("  Model loaded successfully")
-
-        return model
-
-    def predict_from_matrix(self, X, gene_names):
-        """
-        Predict cell types from count matrix.
-
-        Parameters
-        ----------
-        X : sparse matrix or array
-            Raw count matrix (cells x genes)
-        gene_names : array-like
-            Gene names matching columns of X
-
-        Returns
-        -------
-        predictions : np.ndarray
-            Predicted cell type labels
-        """
-        model = self._load_model()
-
-        print(f"  Input: {X.shape[0]} cells x {X.shape[1]} genes")
-
-        gene_names = np.asarray(gene_names)
-        model_genes = self.genes_from_model['feature_name'].values
-
-        # Diagnostic: show gene name formats
-        print(f"  Input gene examples: {gene_names[:3]}")
-        print(f"  Model gene examples: {model_genes[:3]}")
-
-        # Step 1: Subset to genes that exist in model (as per scTab docs)
-        # Try different matching strategies if direct match fails
-        gene_mask = np.isin(gene_names, model_genes)
-        n_direct_match = gene_mask.sum()
-
-        if n_direct_match < 1000:
-            print(f"  Direct match found only {n_direct_match} genes, trying alternative matching...")
-
-            # Try case-insensitive matching
-            gene_names_lower = np.char.lower(gene_names.astype(str))
-            model_genes_lower = np.char.lower(model_genes.astype(str))
-            gene_mask_lower = np.isin(gene_names_lower, model_genes_lower)
-
-            if gene_mask_lower.sum() > n_direct_match:
-                print(f"  Case-insensitive match: {gene_mask_lower.sum()} genes")
-                # Build mapping for case-insensitive
-                model_gene_map = {g.lower(): g for g in model_genes}
-                gene_names_mapped = np.array([
-                    model_gene_map.get(g.lower(), g) for g in gene_names
-                ])
-                gene_mask = np.isin(gene_names_mapped, model_genes)
-                gene_names = gene_names_mapped
-
-            # Try stripping Ensembl version numbers (ENSG00000123456.1 -> ENSG00000123456)
-            if gene_mask.sum() < 1000 and any('.' in str(g) for g in gene_names[:100]):
-                gene_names_stripped = np.array([str(g).split('.')[0] for g in gene_names])
-                model_genes_stripped = np.array([str(g).split('.')[0] for g in model_genes])
-                gene_mask_stripped = np.isin(gene_names_stripped, model_genes_stripped)
-
-                if gene_mask_stripped.sum() > gene_mask.sum():
-                    print(f"  Version-stripped match: {gene_mask_stripped.sum()} genes")
-                    # Rebuild with stripped names
-                    model_gene_map = {str(g).split('.')[0]: g for g in model_genes}
-                    gene_names = np.array([
-                        model_gene_map.get(str(g).split('.')[0], g) for g in gene_names
-                    ])
-                    gene_mask = np.isin(gene_names, model_genes)
-
-        print(f"  Final gene overlap: {gene_mask.sum()}/{len(model_genes)} model genes found in data")
-
-        if gene_mask.sum() < 1000:
-            print("  WARNING: Very low gene overlap! Check gene naming conventions.")
-            print(f"  Input uses: {gene_names[:5]}")
-            print(f"  Model expects: {model_genes[:5]}")
-
-        # Convert to csc_matrix for efficient column slicing
-        if not isinstance(X, csc_matrix):
-            X = csc_matrix(X)
-
-        X_subset = X[:, gene_mask]
-        gene_names_subset = gene_names[gene_mask]
-
-        print(f"  After subsetting to model genes: {X_subset.shape[1]} genes")
-
-        # Step 2: Align genes to model's expected order
-        x_streamlined = streamline_count_matrix(
-            X_subset,
-            gene_names_subset,
-            model_genes
-        )
-
-        # Convert to dense numpy array if sparse
-        if hasattr(x_streamlined, 'toarray'):
-            x_streamlined = x_streamlined.toarray()
-        x_streamlined = np.asarray(x_streamlined, dtype=np.float32)
-
-        # Run inference in batches
-        n_cells = x_streamlined.shape[0]
-        preds = []
-
-        print(f"\nRunning scTab inference on {n_cells:,} cells...")
-        print(f"  Batch size: {self.batch_size}")
-
-        with torch.no_grad():
-            for i in tqdm(range(0, n_cells, self.batch_size)):
-                batch_x = x_streamlined[i:i + self.batch_size]
-
-                # Convert to tensor
-                x_tensor = torch.from_numpy(batch_x).float()
-                if self.device == 'cuda':
-                    x_tensor = x_tensor.cuda()
-
-                # Apply sf-log1p normalization
-                x_input = sf_log1p_norm(x_tensor)
-
-                # Predict
-                logits, _ = self.model(x_input)
-                batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
-                preds.append(batch_preds)
-
-        preds = np.hstack(preds)
-
-        # Map integer predictions to cell type labels
-        predictions = self.cell_type_mapping.loc[preds]['label'].values
-
-        print(f"  Predicted {len(np.unique(predictions))} unique cell types")
-
-        return predictions
-
-
-# ==============================================================================
-# LABEL HARMONIZATION
-# ==============================================================================
-
-# Mapping from scTab Cell Ontology labels to common abbreviated labels
+# Label mapping from scTab Cell Ontology to abbreviated labels
 SCTAB_LABEL_MAP = {
-    # B cells
-    'B cell': 'B',
-    'naive B cell': 'B',
-    'memory B cell': 'B',
-    'plasma cell': 'Plasma',
-    'plasmablast': 'Plasma',
-
-    # Monocytes
+    'B cell': 'B', 'naive B cell': 'B', 'memory B cell': 'B',
+    'plasma cell': 'Plasma', 'plasmablast': 'Plasma',
     'CD14-positive monocyte': 'CD14+ Mono',
     'CD14-positive, CD16-negative classical monocyte': 'CD14+ Mono',
     'CD14-low, CD16-positive monocyte': 'CD16+ Mono',
@@ -687,13 +115,9 @@ SCTAB_LABEL_MAP = {
     'classical monocyte': 'CD14+ Mono',
     'non-classical monocyte': 'CD16+ Mono',
     'intermediate monocyte': 'CD14+ Mono',
-
-    # NK cells
     'natural killer cell': 'NK',
     'CD16-negative, CD56-bright natural killer cell, human': 'NK',
     'CD16-positive, CD56-dim natural killer cell, human': 'NK',
-
-    # T cells
     'T cell': 'T',
     'CD4-positive, alpha-beta T cell': 'CD4+ T',
     'CD8-positive, alpha-beta T cell': 'CD8+ T',
@@ -704,15 +128,11 @@ SCTAB_LABEL_MAP = {
     'naive thymus-derived CD8-positive, alpha-beta T cell': 'CD8+ T',
     'regulatory T cell': 'Treg',
     'gamma-delta T cell': 'gdT',
-
-    # Dendritic cells
     'dendritic cell': 'DC',
     'conventional dendritic cell': 'cDC',
     'plasmacytoid dendritic cell': 'pDC',
     'CD1c-positive myeloid dendritic cell': 'cDC',
     'myeloid dendritic cell': 'cDC',
-
-    # Progenitors / Stem cells
     'hematopoietic stem cell': 'HSPC',
     'hematopoietic multipotent progenitor cell': 'HSPC',
     'common myeloid progenitor': 'CMP',
@@ -724,8 +144,6 @@ SCTAB_LABEL_MAP = {
     'erythrocyte': 'Erythroid',
     'proerythroblast': 'Erythroid',
     'erythroblast': 'Erythroid',
-
-    # Granulocytes
     'neutrophil': 'Neutrophil',
     'basophil': 'Basophil',
     'eosinophil': 'Eosinophil',
@@ -733,239 +151,191 @@ SCTAB_LABEL_MAP = {
 }
 
 
-def harmonize_labels(predictions, label_map=None, ground_truth_labels=None):
-    """
-    Harmonize scTab predictions to match ground truth label vocabulary.
-
-    Parameters
-    ----------
-    predictions : array-like
-        scTab predicted labels (Cell Ontology terms)
-    label_map : dict, optional
-        Custom mapping from scTab labels to target labels
-    ground_truth_labels : array-like, optional
-        Ground truth labels to help with fuzzy matching
-
-    Returns
-    -------
-    harmonized : np.ndarray
-        Harmonized predictions
-    """
-    if label_map is None:
-        label_map = SCTAB_LABEL_MAP
-
+def harmonize_labels(predictions, ground_truth_labels=None):
+    """Harmonize scTab Cell Ontology labels to match ground truth vocabulary."""
     predictions = np.asarray(predictions)
     harmonized = predictions.copy()
 
-    # Apply direct mapping
-    for scTab_label, target_label in label_map.items():
-        mask = predictions == scTab_label
+    for sctab_label, target_label in SCTAB_LABEL_MAP.items():
+        mask = predictions == sctab_label
         harmonized[mask] = target_label
 
-    # Try fuzzy matching for unmapped labels if ground truth is provided
     if ground_truth_labels is not None:
-        gt_labels_set = set(np.unique(ground_truth_labels[pd.notna(ground_truth_labels)]))
+        gt_valid = ground_truth_labels[pd.notna(ground_truth_labels)]
+        gt_labels_set = set([str(x) for x in np.unique(gt_valid)])
         unmapped = set(np.unique(harmonized)) - gt_labels_set
 
         for pred_label in unmapped:
-            # Try simple substring matching
+            if not isinstance(pred_label, str):
+                continue
             pred_lower = pred_label.lower()
             for gt_label in gt_labels_set:
+                if not isinstance(gt_label, str):
+                    continue
                 gt_lower = gt_label.lower()
-                # Check if ground truth label is substring of prediction
                 if gt_lower in pred_lower or pred_lower in gt_lower:
                     mask = harmonized == pred_label
                     harmonized[mask] = gt_label
-                    print(f"  Fuzzy mapped: '{pred_label}' -> '{gt_label}'")
                     break
 
     return harmonized
+
+
+def sf_log1p_norm(x):
+    """Normalize each cell to 10000 counts and apply log1p (scTab preprocessing)."""
+    counts = torch.sum(x, dim=1, keepdim=True)
+    counts += counts == 0.
+    scaling_factor = 10000. / counts
+    return torch.log1p(scaling_factor * x)
+
+
+def run_sctab_inference(adata_query, cell_type_col):
+    """
+    Run scTab zero-shot cell type prediction on an AnnData query object.
+
+    Parameters
+    ----------
+    adata_query : AnnData
+        Query data (raw counts expected in .raw.X or .X)
+    cell_type_col : str
+        Column name for ground truth labels in adata_query.obs
+
+    Returns
+    -------
+    predictions : np.ndarray or None
+        Harmonized predicted cell type labels
+    """
+    if not SCTAB_CHECKPOINT.exists():
+        print(f"  scTab checkpoint not found: {SCTAB_CHECKPOINT}")
+        return None
+    if not MERLIN_DIR.exists():
+        print(f"  Merlin directory not found: {MERLIN_DIR}")
+        return None
+
+    try:
+        # Load model metadata
+        var_path = MERLIN_DIR / "var.parquet"
+        genes_from_model = pd.read_parquet(var_path)
+        model_genes = genes_from_model['feature_name'].values
+
+        cell_type_path = MERLIN_DIR / "categorical_lookup" / "cell_type.parquet"
+        cell_type_mapping = pd.read_parquet(cell_type_path)
+
+        hparams_path = SCTAB_CHECKPOINT.parent / "hparams.yaml"
+        with open(hparams_path) as f:
+            model_params = yaml.full_load(f.read())
+
+        # Get raw counts
+        if adata_query.raw is not None:
+            X = adata_query.raw.X
+            gene_names = adata_query.raw.var_names.values
+        else:
+            X = adata_query.X
+            gene_names = adata_query.var_names.values
+
+        # Match genes to model vocabulary
+        gene_mask = np.isin(gene_names, model_genes)
+        print(f"  Gene overlap: {gene_mask.sum()}/{len(model_genes)}")
+
+        if gene_mask.sum() < 1000:
+            print("  WARNING: Low gene overlap - check gene naming conventions")
+
+        # Subset and align genes
+        X_subset = csc_matrix(X)[:, gene_mask]
+        gene_names_subset = gene_names[gene_mask]
+
+        gene_to_idx = {g: i for i, g in enumerate(gene_names_subset)}
+        n_cells = X_subset.shape[0]
+        n_model_genes = len(model_genes)
+        aligned = np.zeros((n_cells, n_model_genes), dtype=np.float32)
+
+        X_dense = X_subset.toarray() if hasattr(X_subset, 'toarray') else np.asarray(X_subset)
+        for i, gene in enumerate(model_genes):
+            if gene in gene_to_idx:
+                aligned[:, i] = X_dense[:, gene_to_idx[gene]]
+
+        # Load model
+        if torch.cuda.is_available():
+            ckpt = torch.load(SCTAB_CHECKPOINT, weights_only=False)
+            device = 'cuda'
+        else:
+            ckpt = torch.load(SCTAB_CHECKPOINT, map_location=torch.device('cpu'), weights_only=False)
+            device = 'cpu'
+
+        tabnet_weights = OrderedDict()
+        for name, weight in ckpt['state_dict'].items():
+            if 'classifier.' in name:
+                tabnet_weights[name.replace('classifier.', '')] = weight
+
+        from cellnet.tabnet.tab_network import TabNet
+
+        model = TabNet(
+            input_dim=model_params['gene_dim'],
+            output_dim=model_params['type_dim'],
+            n_d=model_params['n_d'],
+            n_a=model_params['n_a'],
+            n_steps=model_params['n_steps'],
+            gamma=model_params['gamma'],
+            n_independent=model_params['n_independent'],
+            n_shared=model_params['n_shared'],
+            epsilon=model_params['epsilon'],
+            virtual_batch_size=model_params['virtual_batch_size'],
+            momentum=model_params['momentum'],
+            mask_type=model_params['mask_type'],
+        )
+        model.load_state_dict(tabnet_weights)
+        model.eval()
+        if device == 'cuda':
+            model = model.cuda()
+
+        # Run inference
+        preds = []
+        with torch.no_grad():
+            for i in tqdm(range(0, n_cells, BATCH_SIZE), desc="  scTab inference"):
+                batch_x = aligned[i:i + BATCH_SIZE]
+                x_tensor = torch.from_numpy(batch_x).float()
+                if device == 'cuda':
+                    x_tensor = x_tensor.cuda()
+                x_input = sf_log1p_norm(x_tensor)
+                logits, _ = model(x_input)
+                batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
+                preds.append(batch_preds)
+
+        preds = np.hstack(preds)
+        predictions = cell_type_mapping.loc[preds]['label'].values
+
+        # Harmonize labels
+        y_true = adata_query.obs[cell_type_col].values
+        predictions = harmonize_labels(predictions, ground_truth_labels=y_true)
+
+        return predictions
+
+    except Exception as e:
+        print(f"  scTab error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ==============================================================================
 # EVALUATION
 # ==============================================================================
 
-def evaluate_predictions(y_true, y_pred, method_name="scTab"):
-    """
-    Compute evaluation metrics.
-
-    Parameters
-    ----------
-    y_true : array-like
-        Ground truth labels
-    y_pred : array-like
-        Predicted labels
-    method_name : str
-        Name for display
-
-    Returns
-    -------
-    metrics : dict
-        Dictionary of computed metrics
-    """
-    print(f"\n{'='*60}")
-    print(f"EVALUATION: {method_name}")
-    print('='*60)
-
-    # Remove any NaN from ground truth
+def compute_metrics(y_true, y_pred):
+    """Compute evaluation metrics, filtering NaN ground truth labels."""
     valid_mask = pd.notna(y_true)
-    y_true_valid = np.asarray(y_true)[valid_mask]
-    y_pred_valid = np.asarray(y_pred)[valid_mask]
+    y_t = np.asarray(y_true)[valid_mask]
+    y_p = np.asarray(y_pred)[valid_mask]
 
-    print(f"Cells with valid labels: {len(y_true_valid)}")
-
-    # Compute metrics
-    accuracy = accuracy_score(y_true_valid, y_pred_valid)
-    ari = adjusted_rand_score(y_true_valid, y_pred_valid)
-    nmi = normalized_mutual_info_score(y_true_valid, y_pred_valid)
-    f1_macro = f1_score(y_true_valid, y_pred_valid, average='macro', zero_division=0)
-    f1_weighted = f1_score(y_true_valid, y_pred_valid, average='weighted', zero_division=0)
-
-    metrics = {
-        'method': method_name,
-        'accuracy': accuracy,
-        'ari': ari,
-        'nmi': nmi,
-        'f1_macro': f1_macro,
-        'f1_weighted': f1_weighted,
-        'n_cells': len(y_true_valid),
-        'n_true_labels': len(np.unique(y_true_valid)),
-        'n_pred_labels': len(np.unique(y_pred_valid)),
+    return {
+        'accuracy': accuracy_score(y_t, y_p),
+        'ari': adjusted_rand_score(y_t, y_p),
+        'f1_macro': f1_score(y_t, y_p, average='macro', zero_division=0),
+        'f1_weighted': f1_score(y_t, y_p, average='weighted', zero_division=0),
+        'n_cells': len(y_t),
+        'n_true_labels': len(np.unique(y_t)),
+        'n_pred_labels': len(np.unique(y_p)),
     }
-
-    # Print results
-    print(f"\nMetrics:")
-    print(f"  Accuracy:      {accuracy:.4f}")
-    print(f"  ARI:           {ari:.4f}")
-    print(f"  NMI:           {nmi:.4f}")
-    print(f"  F1 (macro):    {f1_macro:.4f}")
-    print(f"  F1 (weighted): {f1_weighted:.4f}")
-    print(f"\nLabel counts:")
-    print(f"  Ground truth:  {metrics['n_true_labels']} unique cell types")
-    print(f"  Predicted:     {metrics['n_pred_labels']} unique cell types")
-
-    # Classification report
-    print(f"\nPer-class report:")
-    print(classification_report(y_true_valid, y_pred_valid, zero_division=0))
-
-    return metrics
-
-
-def label_overlap_analysis(y_true, y_pred):
-    """Analyze overlap between true and predicted label sets."""
-    true_labels = set(np.unique(y_true[pd.notna(y_true)]))
-    pred_labels = set(np.unique(y_pred))
-
-    overlap = true_labels & pred_labels
-    only_true = true_labels - pred_labels
-    only_pred = pred_labels - true_labels
-
-    print(f"\n{'='*60}")
-    print("LABEL OVERLAP ANALYSIS")
-    print('='*60)
-    print(f"Ground truth labels: {len(true_labels)}")
-    print(f"Predicted labels:    {len(pred_labels)}")
-    print(f"Overlapping labels:  {len(overlap)}")
-    print(f"\nLabels only in ground truth ({len(only_true)}):")
-    for label in sorted(only_true)[:10]:
-        print(f"  - {label}")
-    if len(only_true) > 10:
-        print(f"  ... and {len(only_true)-10} more")
-    print(f"\nLabels only in predictions ({len(only_pred)}):")
-    for label in sorted(only_pred)[:10]:
-        print(f"  - {label}")
-    if len(only_pred) > 10:
-        print(f"  ... and {len(only_pred)-10} more")
-
-
-# ==============================================================================
-# SCENARIO EVALUATION
-# ==============================================================================
-
-def run_evaluation_scenario(scenario, sctab, study_col, cell_type_col):
-    """
-    Run scTab evaluation for a single scenario.
-
-    Note: scTab is a zero-shot model, so reference data is not used.
-    We include reference info for protocol consistency with reference-based methods.
-
-    Parameters
-    ----------
-    scenario : dict
-        Scenario configuration with 'name', 'reference', 'query' keys
-    sctab : ScTabInference
-        Initialized scTab model
-    study_col : str
-        Column name for study/batch
-    cell_type_col : str
-        Column name for cell type labels
-
-    Returns
-    -------
-    metrics : dict
-        Evaluation metrics for this scenario
-    """
-    print(f"\n>>> SCENARIO: {scenario['name']}")
-
-    query_study = scenario['query']
-
-    # Load query data
-    X_query, obs_query, var_query = load_h5ad_data(
-        DATA_PATH,
-        study_col=study_col,
-        cell_type_col=cell_type_col,
-        study_name=query_study,
-        max_cells=MAX_CELLS,
-        use_raw=True
-    )
-
-    print(f"  Query ({query_study}): {X_query.shape[0]:,} cells x {X_query.shape[1]:,} genes")
-
-    # Get gene names
-    if 'feature_name' in var_query.columns:
-        gene_names = var_query['feature_name'].values
-    elif var_query.index is not None and len(var_query.index) > 0:
-        gene_names = var_query.index.values
-    else:
-        for col in ['gene_name', 'gene_symbol', 'symbol', 'name']:
-            if col in var_query.columns:
-                gene_names = var_query[col].values
-                break
-        else:
-            gene_names = np.arange(X_query.shape[1]).astype(str)
-
-    # Get ground truth labels
-    y_true = obs_query[cell_type_col].values
-
-    # Run prediction
-    start_time = time.time()
-    y_pred_raw = sctab.predict_from_matrix(X_query, gene_names)
-    duration = time.time() - start_time
-
-    # Harmonize labels
-    y_pred = harmonize_labels(y_pred_raw, ground_truth_labels=y_true)
-
-    # Compute metrics
-    valid_mask = pd.notna(y_true)
-    y_t = y_true[valid_mask]
-    y_p = y_pred[valid_mask]
-
-    metrics = {
-        'Scenario': scenario['name'],
-        'Reference': scenario['reference'],
-        'Query': scenario['query'],
-        'Accuracy': accuracy_score(y_t, y_p),
-        'F1_Macro': f1_score(y_t, y_p, average='macro', zero_division=0),
-        'ARI': adjusted_rand_score(y_t, y_p),
-        'NMI': normalized_mutual_info_score(y_t, y_p),
-        'Time_Sec': duration,
-        'N_Cells': len(y_t),
-    }
-
-    print(f"  Done. Accuracy: {metrics['Accuracy']:.4f} | F1: {metrics['F1_Macro']:.4f} | Time: {duration:.1f}s")
-
-    return metrics
 
 
 # ==============================================================================
@@ -973,68 +343,113 @@ def run_evaluation_scenario(scenario, sctab, study_col, cell_type_col):
 # ==============================================================================
 
 def main():
-    """Run scTab multi-scenario evaluation."""
+    print("=" * 80)
+    print("scTab Zero-Shot Evaluation")
+    print("=" * 80)
+    print(f"\nData:       {DATA_PATH}")
+    print(f"Checkpoint: {SCTAB_CHECKPOINT}")
+    print(f"Merlin dir: {MERLIN_DIR}")
+    print(f"Max cells:  {MAX_CELLS_PER_STUDY}")
+    print(f"Scenarios:  {len(SCENARIOS)}")
 
-    print("="*80)
-    print("scTab Multi-Scenario Evaluation")
-    print("="*80)
-    print(f"\nConfiguration:")
-    print(f"  Data:       {DATA_PATH}")
-    print(f"  Checkpoint: {SCTAB_CHECKPOINT}")
-    print(f"  Merlin dir: {MERLIN_DIR}")
-    print(f"  Max cells:  {MAX_CELLS}")
-    print(f"  Scenarios:  {len(SCENARIOS)}")
-
-    # Set random seed for reproducibility
     np.random.seed(42)
 
-    # Detect columns
-    study_col, cell_type_col, _ = detect_columns(DATA_PATH)
-    print(f"\nDetected columns:")
+    # Load atlas (backed mode - memory efficient)
+    print("\nLoading atlas...")
+    adata = sc.read_h5ad(DATA_PATH, backed='r')
+    study_col = get_study_column(adata)
+    cell_type_col = get_cell_type_column(adata)
     print(f"  Study column:     {study_col}")
     print(f"  Cell type column: {cell_type_col}")
 
-    if study_col is None or cell_type_col is None:
-        print("ERROR: Could not detect required columns!")
-        return
-
-    # Initialize scTab model (once, reuse for all scenarios)
-    print(f"\n{'='*60}")
-    print("INITIALIZING SCTAB MODEL")
-    print('='*60)
-
-    sctab = ScTabInference(
-        checkpoint_path=SCTAB_CHECKPOINT,
-        merlin_dir=MERLIN_DIR,
-        batch_size=BATCH_SIZE
-    )
-
-    # Run all scenarios
     all_results = []
 
     for scenario in SCENARIOS:
-        try:
-            metrics = run_evaluation_scenario(scenario, sctab, study_col, cell_type_col)
-            all_results.append(metrics)
-        except Exception as e:
-            print(f"  Failed scenario {scenario['name']}: {e}")
-            import traceback
-            traceback.print_exc()
+        print(f"\n{'=' * 80}")
+        print(f"SCENARIO: {scenario['name']}")
+        print('=' * 80)
 
-    # Summary table
-    print("\n" + "="*80)
-    print("FINAL COMPARISON")
-    print("="*80)
+        # Load query data (scTab is zero-shot - reference not used for inference)
+        adata_query = subset_data(adata, studies=[scenario['query']]).to_memory()
 
-    summary_df = pd.DataFrame(all_results)
-    print(summary_df.to_string(index=False))
+        if MAX_CELLS_PER_STUDY and adata_query.n_obs > MAX_CELLS_PER_STUDY:
+            indices = np.random.choice(adata_query.n_obs, MAX_CELLS_PER_STUDY, replace=False)
+            adata_query = adata_query[indices].copy()
 
-    # Save results
-    output_path = OUTPUT_DIR / "sctab_multi_scenario_results.csv"
-    summary_df.to_csv(output_path, index=False)
-    print(f"\nResults saved to: {output_path}")
+        print(f"  Query:  {adata_query.n_obs:,} cells  ({scenario['query']})")
+        print(f"  NOTE:   scTab is zero-shot, reference data not used for inference")
 
-    return summary_df
+        y_true = adata_query.obs[cell_type_col].values
+
+        # scTab: train_time = 0 (pre-trained, zero-shot)
+        train_time = 0.0
+
+        # Inference
+        infer_start = time.time()
+        y_pred = run_sctab_inference(adata_query, cell_type_col)
+        infer_time = time.time() - infer_start
+
+        if y_pred is None:
+            print("  SKIP: scTab inference failed")
+            continue
+
+        metrics = compute_metrics(y_true, y_pred)
+        result = {
+            'scenario': scenario['name'],
+            'reference': scenario['reference'],
+            'query': scenario['query'],
+            'accuracy': metrics['accuracy'],
+            'ari': metrics['ari'],
+            'f1_macro': metrics['f1_macro'],
+            'f1_weighted': metrics['f1_weighted'],
+            'train_time_sec': train_time,
+            'inference_time_sec': infer_time,
+            'time_sec': train_time + infer_time,
+            'n_cells': metrics['n_cells'],
+            'n_true_labels': metrics['n_true_labels'],
+            'n_pred_labels': metrics['n_pred_labels'],
+        }
+        all_results.append(result)
+
+        print(f"\n  Results:")
+        print(f"    Accuracy:       {metrics['accuracy']:.4f}")
+        print(f"    ARI:            {metrics['ari']:.4f}")
+        print(f"    F1 (macro):     {metrics['f1_macro']:.4f}")
+        print(f"    F1 (weighted):  {metrics['f1_weighted']:.4f}")
+        print(f"    Train time:     {train_time:.1f}s  (zero-shot, no training)")
+        print(f"    Inference time: {infer_time:.1f}s")
+        print(f"    True labels:    {metrics['n_true_labels']}")
+        print(f"    Pred labels:    {metrics['n_pred_labels']}")
+
+        print(f"\n  Per-class report:")
+        valid_mask = pd.notna(y_true)
+        print(classification_report(
+            np.asarray(y_true)[valid_mask],
+            np.asarray(y_pred)[valid_mask],
+            zero_division=0
+        ))
+
+    # Summary
+    print("\n" + "=" * 80)
+    print("FINAL SUMMARY")
+    print("=" * 80)
+
+    if all_results:
+        df = pd.DataFrame(all_results)
+        cols = ['scenario', 'accuracy', 'f1_macro', 'ari', 'inference_time_sec']
+        print(df[cols].to_string(index=False))
+
+        print(f"\nAverage performance:")
+        print(f"  Accuracy:   {df['accuracy'].mean():.4f} ± {df['accuracy'].std():.4f}")
+        print(f"  F1 (macro): {df['f1_macro'].mean():.4f} ± {df['f1_macro'].std():.4f}")
+        print(f"  ARI:        {df['ari'].mean():.4f} ± {df['ari'].std():.4f}")
+        print(f"  Infer time: {df['inference_time_sec'].mean():.1f}s ± {df['inference_time_sec'].std():.1f}s")
+
+        output_path = OUTPUT_DIR / "sctab_results.csv"
+        df.to_csv(output_path, index=False)
+        print(f"\nResults saved to: {output_path}")
+    else:
+        print("No scenarios completed successfully.")
 
 
 if __name__ == "__main__":
