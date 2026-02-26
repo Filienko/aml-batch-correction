@@ -76,9 +76,10 @@ def main():
         adata_train = subset_data(adata, studies=train_studies)
         adata_test = subset_data(adata, studies=[held_out_study])
 
-        # SCimilarity (doesn't need training on specific studies)
+        # SCimilarity: train classifier on reference studies, predict on held-out study
         pipeline = Pipeline(model="scimilarity", model_params={'model_path': MODEL_PATH})
-        predictions = pipeline.predict(adata_test.copy())
+        pipeline.model.fit(adata_train, target_column=cell_type_col)
+        predictions = pipeline.model.predict(adata_test)
 
         # Evaluate
         metrics = compute_metrics(

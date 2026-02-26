@@ -1440,24 +1440,23 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
     # =========================================================================
     if RUN_SCIMILARITY:
         try:
-            # Training phase: preprocess and embed reference data (paid once per run)
+            # Training phase: embed reference data directly (SCimilarity uses raw counts
+            # internally and ignores any PCA/HVG preprocessing, so preprocess_data()
+            # would only waste CPU/memory without affecting the embeddings).
             train_start = time.time()
-            adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-            emb_ref = get_scimilarity_embeddings(adata_ref_prep, MODEL_PATH)
+            emb_ref = get_scimilarity_embeddings(adata_ref, MODEL_PATH)
             labels_ref = adata_ref.obs[cell_type_col_local].values
             ref_embed_time = time.time() - train_start
 
-            # Inference phase: preprocess and embed query data (paid once per run)
+            # Inference phase: embed query data directly (same reason as above)
             infer_start = time.time()
-            adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
-            emb_query = get_scimilarity_embeddings(adata_query_prep, MODEL_PATH)
+            emb_query = get_scimilarity_embeddings(adata_query, MODEL_PATH)
             query_embed_time = time.time() - infer_start
 
             # Store for UMAP (only first run)
             if generate_umap and run_id == 0:
                 embeddings_query = emb_query.copy()
 
-            del adata_ref_prep, adata_query_prep
             gc.collect()
 
             # Individual classifiers
