@@ -59,6 +59,7 @@ class Pipeline:
         batch_key: Optional[str] = None,
         preprocess: bool = True,
         model_params: Optional[Dict[str, Any]] = None,
+        random_state: Optional[int] = None,
     ):
         """Initialize the pipeline."""
         if model not in AVAILABLE_MODELS:
@@ -70,6 +71,7 @@ class Pipeline:
         self.batch_key = batch_key
         self.preprocess = preprocess
         self.model_params = model_params or {}
+        self.random_state = random_state
 
         # Initialize model
         self.model = get_model(model, **self.model_params)
@@ -131,6 +133,7 @@ class Pipeline:
         test_size: float = 0.2,
         subset_params: Optional[Dict[str, Any]] = None,
         metrics: Optional[List[str]] = None,
+        random_state: Optional[int] = None,
     ) -> Dict[str, float]:
         """Evaluate model performance with train/test split.
 
@@ -146,6 +149,11 @@ class Pipeline:
             Parameters for subsetting data
         metrics : list of str, optional
             Metrics to compute. Default: ['accuracy', 'ari', 'nmi', 'f1']
+        random_state : int, optional
+            Seed for the train/test split.  Falls back to the value passed to
+            ``Pipeline.__init__`` (itself defaulting to ``None``, which lets
+            numpy's global seed govern the split — important for multi-run
+            statistical evaluation).
 
         Returns
         -------
@@ -158,12 +166,15 @@ class Pipeline:
         if subset_params:
             adata = subset_data(adata, **subset_params)
 
+        # Resolve random state: explicit arg > instance default > None
+        rs = random_state if random_state is not None else self.random_state
+
         # Split data
         from sklearn.model_selection import train_test_split
 
         indices = np.arange(adata.n_obs)
         train_idx, test_idx = train_test_split(
-            indices, test_size=test_size, random_state=42,
+            indices, test_size=test_size, random_state=rs,
             stratify=adata.obs[target_column] if target_column in adata.obs else None
         )
 
@@ -199,6 +210,60 @@ class Pipeline:
         logger.info(f"Results: {results}")
 
         return results
+
+    def optimize_hyperparameters(
+        self,
+        adata: AnnData,
+        target_column: str,
+        cv: int = 3,
+        n_trials: int = 20,
+    ) -> tuple:
+        """Find the best hyperparameters and fit on all provided data.
+
+        Runs a cross-validated hyperparameter search on the labelled reference
+        data.  After this call the internal model is fitted with the best found
+        parameters and ``predict()`` can be called directly — no separate
+        ``fit()`` is needed.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Labeled reference data.
+        target_column : str
+            Cell-type label column in ``adata.obs``.
+        cv : int, default=3
+            Number of cross-validation folds.
+        n_trials : int, default=20
+            Maximum number of hyperparameter combinations to try.
+
+        Returns
+        -------
+        best_params : dict
+            Best hyperparameters found by the search.
+        elapsed_sec : float
+            Wall-clock time taken by the search (seconds).
+
+        Examples
+        --------
+        >>> pipeline = Pipeline(model='random_forest')
+        >>> best_params, hpo_time = pipeline.optimize_hyperparameters(
+        ...     adata_ref, target_column='cell_type'
+        ... )
+        >>> predictions = pipeline.model.predict(adata_query)
+        """
+        import time
+
+        if self.preprocess:
+            adata = preprocess_data(adata.copy(), batch_key=self.batch_key)
+
+        t0 = time.time()
+        best_params = self.model.optimize_hyperparameters(
+            adata, target_column, cv=cv, n_trials=n_trials,
+        )
+        elapsed = time.time() - t0
+
+        logger.info(f"HPO completed in {elapsed:.1f}s. Best params: {best_params}")
+        return best_params, elapsed
 
     def compare_models(
         self,

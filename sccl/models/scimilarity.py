@@ -366,6 +366,203 @@ class SCimilarityModel(BaseModel):
 
         return refined_predictions
 
+    # ------------------------------------------------------------------
+    # Hyperparameter optimisation
+    # ------------------------------------------------------------------
+
+    def optimize_hyperparameters(
+        self,
+        adata: AnnData,
+        target_column: str,
+        cv: int = 3,
+        n_trials: int = 20,
+    ) -> dict:
+        """Optimise the classifier head on SCimilarity embeddings.
+
+        Computes reference embeddings, runs cross-validated hyperparameter
+        search over the classifier head, and fits the best classifier on
+        all data.  After this call the model is ready for ``predict()`` —
+        no separate ``fit()`` is needed.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Labeled reference data.
+        target_column : str
+            Cell-type label column in ``adata.obs``.
+        cv : int, default=3
+            Cross-validation folds.
+        n_trials : int, default=20
+            Max combinations for ``RandomizedSearchCV``.
+
+        Returns
+        -------
+        best_params : dict
+        """
+        import pandas as pd
+        from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+
+        _PARAM_GRIDS = {
+            'knn': {'n_neighbors': [5, 10, 15, 30, 50]},
+            'random_forest': {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [10, 20, None],
+            },
+            'logistic_regression': {'C': [0.01, 0.1, 1.0, 10.0, 100.0]},
+            'svm': {'C': [0.1, 1.0, 10.0], 'gamma': ['scale', 'auto']},
+        }
+
+        param_grid = _PARAM_GRIDS.get(self.classifier, {})
+
+        # Compute and cache reference embeddings
+        embeddings = self.get_embedding(adata)
+        labels = adata.obs[target_column].values
+        valid = pd.notna(labels)
+        X = embeddings[valid]
+        y = labels[valid]
+
+        # Store so predict() works after this call (no separate fit() needed)
+        self._reference_embeddings = X
+        self._reference_labels = y
+
+        if not param_grid:
+            logger.info(
+                f"No HPO grid for classifier '{self.classifier}', "
+                "fitting with current defaults."
+            )
+            clf = self._get_classifier()
+            clf.fit(X, y)
+            self._trained_classifier = clf
+            self.is_trained = True
+            return {}
+
+        n_combos = 1
+        for v in param_grid.values():
+            n_combos *= len(v)
+
+        base_clf = self._get_classifier()
+        if n_combos <= n_trials:
+            search = GridSearchCV(
+                base_clf, param_grid, cv=cv, n_jobs=-1,
+                scoring='f1_macro', refit=True,
+            )
+        else:
+            search = RandomizedSearchCV(
+                base_clf, param_grid, n_iter=n_trials, cv=cv,
+                n_jobs=-1, random_state=42,
+                scoring='f1_macro', refit=True,
+            )
+
+        search.fit(X, y)
+        # best_estimator_ is already fitted on all data (refit=True)
+        self._trained_classifier = search.best_estimator_
+        self.is_trained = True
+
+        logger.info(
+            f"SCimilarity HPO best params: {search.best_params_} "
+            f"(CV F1: {search.best_score_:.4f})"
+        )
+        return search.best_params_
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Save the trained classifier head to disk.
+
+        Saves two files::
+
+            <path>/classifier.joblib   — fitted sklearn classifier head
+            <path>/config.json         — model config (paths, species, …)
+
+        .. note::
+            The SCimilarity **foundation model weights** at ``self.model_path``
+            are *not* copied.  They must remain accessible at the original
+            path when loading.
+
+        Parameters
+        ----------
+        path : str
+            Directory to create and populate.
+
+        Examples
+        --------
+        >>> model = SCimilarityModel(model_path='/data/model_v1.1')
+        >>> model.fit(adata_ref, target_column='cell_type')
+        >>> model.save('/tmp/scim_knn')
+        >>> # Later session (foundation weights still at /data/model_v1.1):
+        >>> model = SCimilarityModel.load('/tmp/scim_knn')
+        >>> predictions = model.predict(adata_query)
+        """
+        import joblib
+        import json
+        from pathlib import Path
+
+        if not self.is_trained or self._trained_classifier is None:
+            raise RuntimeError(
+                "Model must be trained before saving. "
+                "Call fit() or optimize_hyperparameters() first."
+            )
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        joblib.dump(self._trained_classifier, path / 'classifier.joblib')
+
+        config = {
+            'model_class': 'SCimilarityModel',
+            'model_path': self.model_path,
+            'n_neighbors': self.n_neighbors,
+            'resolution': self.resolution,
+            'species': self.species,
+            'classifier': self.classifier,
+            'classifier_params': self.classifier_params,
+            'label_propagation': self.label_propagation,
+            'propagation_neighbors': self.propagation_neighbors,
+        }
+        with open(path / 'config.json', 'w') as f:
+            json.dump(config, f, indent=2)
+
+        logger.info(f"Saved SCimilarity classifier head to {path}")
+        logger.info(
+            f"  Foundation model weights must remain at: {self.model_path}"
+        )
+
+    @classmethod
+    def load(cls, path: str) -> 'SCimilarityModel':
+        """Load a saved SCimilarity classifier from disk.
+
+        Restores the fitted classifier head.  The SCimilarity foundation
+        model is lazy-loaded from the original ``model_path`` on the first
+        call to ``predict()`` or ``get_embedding()``.
+
+        Parameters
+        ----------
+        path : str
+            Directory written by ``save()``.
+
+        Returns
+        -------
+        model : SCimilarityModel
+            Ready-to-predict model instance.
+        """
+        import joblib
+        import json
+        from pathlib import Path
+
+        path = Path(path)
+        with open(path / 'config.json') as f:
+            config = json.load(f)
+
+        config.pop('model_class', None)
+        obj = cls(**config)
+        obj._trained_classifier = joblib.load(path / 'classifier.joblib')
+        obj.is_trained = True
+
+        logger.info(f"Loaded SCimilarity classifier from {path}")
+        return obj
+
     def __repr__(self) -> str:
         """String representation."""
         return (

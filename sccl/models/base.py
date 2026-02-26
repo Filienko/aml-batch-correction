@@ -90,6 +90,82 @@ class BaseModel(ABC):
         else:
             raise NotImplementedError("Model does not provide embeddings")
 
+    def save(self, path: str) -> None:
+        """Save the trained model to disk.
+
+        Parameters
+        ----------
+        path : str
+            Directory where model files will be written.
+
+        Notes
+        -----
+        Concrete implementations save at minimum:
+          - the fitted classifier / weights
+          - a metadata file with constructor params and class name
+
+        Use ``sccl.load_model(path)`` (or the concrete class's ``load(path)``)
+        to restore the model in a later session.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement save(). "
+            "Use a concrete model class (e.g. RandomForestModel, SCimilarityModel)."
+        )
+
+    @classmethod
+    def load(cls, path: str) -> 'BaseModel':
+        """Load a trained model from disk.
+
+        Parameters
+        ----------
+        path : str
+            Directory written by save().
+
+        Returns
+        -------
+        model : BaseModel
+            Loaded, ready-to-predict model instance.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} does not implement load(). "
+            "Use the concrete model class (e.g. RandomForestModel.load(path)) "
+            "or the top-level sccl.load_model(path) helper."
+        )
+
+    def optimize_hyperparameters(
+        self,
+        adata: AnnData,
+        target_column: str,
+        cv: int = 3,
+        n_trials: int = 20,
+    ) -> dict:
+        """Find the best hyperparameters and fit on all provided data.
+
+        After this call, the model is fitted with the best found parameters
+        and is ready for ``predict()`` — no separate ``fit()`` needed.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Labeled reference data.
+        target_column : str
+            Column in ``adata.obs`` containing cell-type labels.
+        cv : int, default=3
+            Number of cross-validation folds.
+        n_trials : int, default=20
+            Maximum number of hyperparameter combinations to try
+            (passed to ``RandomizedSearchCV``; ``GridSearchCV`` is used
+            when the total grid is smaller than this value).
+
+        Returns
+        -------
+        best_params : dict
+            Best hyperparameters found by the search.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement optimize_hyperparameters()."
+        )
+
     def __repr__(self) -> str:
         """String representation."""
         params_str = ", ".join(f"{k}={v}" for k, v in self.params.items())

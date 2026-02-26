@@ -125,6 +125,26 @@ N_RUNS = 5
 FIGURE_DIR = OUTPUT_DIR / "figures"
 FIGURE_DIR.mkdir(exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# Hyperparameter optimisation (SCimilarity classifiers only)
+# ---------------------------------------------------------------------------
+# Set RUN_HPO = True to enable. Adds a CV search before each classifier fit;
+# extra wall-clock time is recorded as 'hpo_time_sec' and shown in the
+# timing-with-HPO visualisation alongside the standard timing plot.
+RUN_HPO = False
+N_HPO_CV_FOLDS = 3
+
+# Search grids (GridSearchCV for small grids, RandomizedSearchCV otherwise)
+HPO_PARAM_GRIDS = {
+    'knn':    {'n_neighbors': [5, 10, 15, 30, 50]},
+    'logreg': {'C': [0.01, 0.1, 1.0, 10.0, 100.0]},
+    'rf':     {'n_estimators': [50, 100, 200], 'max_depth': [10, 20, None]},
+    'mlp':    {
+        'hidden_layer_sizes': [(64, 32), (128, 64), (256, 128)],
+        'alpha': [0.0001, 0.001, 0.01],
+    },
+}
+
 
 # ==============================================================================
 # SCIMILARITY METHODS
@@ -621,6 +641,135 @@ def plot_timing_breakdown(df_results, output_dir=None):
             plt.show()
 
 
+def plot_timing_breakdown_with_hpo(df_results, output_dir=None):
+    """Stacked bar plot: HPO + Training + Inference time per method.
+
+    Extends ``plot_timing_breakdown`` with an extra segment for the optional
+    hyperparameter-optimisation phase.  Methods that did not run HPO show a
+    zero-width HPO segment so all bars remain comparable.
+
+    Parameters
+    ----------
+    df_results : pd.DataFrame
+        Results dataframe with columns: scenario, method, hpo_time_sec,
+        train_time_sec, inference_time_sec.
+    output_dir : Path, optional
+        Output directory for figures.
+    """
+    from matplotlib.patches import Patch
+
+    required = {'train_time_sec', 'inference_time_sec', 'hpo_time_sec'}
+    if not required.issubset(df_results.columns):
+        missing = required - set(df_results.columns)
+        print(f"    plot_timing_breakdown_with_hpo: missing columns {missing}, skipping.")
+        return
+
+    # Show all methods that appear in the data (same set as timing breakdown)
+    main_methods = ['CellTypist', 'SingleR', 'scTab', 'SCimilarity-mlp']
+    df_plot = df_results[df_results['method'].isin(main_methods)].copy()
+    if len(df_plot) == 0:
+        df_plot = df_results.copy()
+
+    hpo_color   = '#9B59B6'  # Purple
+    train_color = '#4ECDC4'  # Teal
+    infer_color = '#FF6B6B'  # Coral
+
+    for scenario in df_plot['scenario'].unique():
+        df_scenario = df_plot[df_plot['scenario'] == scenario].copy()
+
+        timing = df_scenario.groupby('method').agg({
+            'hpo_time_sec':       'mean',
+            'train_time_sec':     'mean',
+            'inference_time_sec': 'mean',
+        }).reset_index()
+
+        timing['total'] = (
+            timing['hpo_time_sec']
+            + timing['train_time_sec']
+            + timing['inference_time_sec']
+        )
+        timing = timing.sort_values('total', ascending=True)
+
+        n_methods = len(timing)
+        fig_height = max(4, n_methods * 0.9)
+        fig, ax = plt.subplots(figsize=(11, fig_height))
+
+        y_pos = np.arange(n_methods)
+
+        bars_hpo = ax.barh(
+            y_pos, timing['hpo_time_sec'],
+            color=hpo_color, label='HPO', alpha=0.85,
+            edgecolor='black', linewidth=0.5,
+        )
+        bars_train = ax.barh(
+            y_pos, timing['train_time_sec'],
+            left=timing['hpo_time_sec'],
+            color=train_color, label='Training', alpha=0.85,
+            edgecolor='black', linewidth=0.5,
+        )
+        bars_infer = ax.barh(
+            y_pos, timing['inference_time_sec'],
+            left=timing['hpo_time_sec'] + timing['train_time_sec'],
+            color=infer_color, label='Inference', alpha=0.85,
+            edgecolor='black', linewidth=0.5,
+        )
+
+        # Value labels inside each segment when wide enough
+        for i, row in enumerate(timing.itertuples()):
+            total = row.total
+            if row.hpo_time_sec > total * 0.1:
+                ax.text(row.hpo_time_sec / 2, i,
+                        f'{row.hpo_time_sec:.1f}s',
+                        ha='center', va='center',
+                        fontsize=8, fontweight='bold', color='white')
+            if row.train_time_sec > total * 0.1:
+                ax.text(row.hpo_time_sec + row.train_time_sec / 2, i,
+                        f'{row.train_time_sec:.1f}s',
+                        ha='center', va='center',
+                        fontsize=8, fontweight='bold', color='white')
+            if row.inference_time_sec > total * 0.1:
+                ax.text(
+                    row.hpo_time_sec + row.train_time_sec + row.inference_time_sec / 2,
+                    i, f'{row.inference_time_sec:.1f}s',
+                    ha='center', va='center',
+                    fontsize=8, fontweight='bold', color='white')
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(timing['method'])
+        ax.set_xlabel('Time (seconds)', fontsize=12, fontweight='bold')
+
+        if 'Zheng' in scenario:
+            title = 'Zheng PBMC (Train → Test, Same Dataset)\nTiming Breakdown (HPO + Training + Inference)'
+        else:
+            short_name = scenario.split(':')[-1].strip() if ':' in scenario else scenario
+            title = f'{short_name}\nTiming Breakdown (HPO + Training + Inference)'
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
+
+        legend_patches = [
+            Patch(facecolor=hpo_color,   label='HPO',       alpha=0.85, edgecolor='black', linewidth=0.5),
+            Patch(facecolor=train_color, label='Training',  alpha=0.85, edgecolor='black', linewidth=0.5),
+            Patch(facecolor=infer_color, label='Inference', alpha=0.85, edgecolor='black', linewidth=0.5),
+        ]
+        ax.legend(handles=legend_patches, title='Phase', loc='lower right',
+                  fontsize=10, title_fontsize=11, frameon=True)
+
+        ax.xaxis.grid(True, linestyle='--', alpha=0.6)
+        ax.set_axisbelow(True)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+
+        if output_dir:
+            safe = scenario.replace(':', '').replace(' ', '_').replace('→', 'to').replace('->', 'to')[:40]
+            filename = output_dir / f"methods_time_hpo_{safe}.png"
+            plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"    Saved HPO timing breakdown: {filename.name}")
+        else:
+            plt.show()
+
+
 def plot_accumulative_accuracy(df_results, output_dir=None):
     """
     Create box plot showing F1 scores aggregated across ALL dataset configurations.
@@ -946,6 +1095,13 @@ def run_singler_prediction(adata_ref, adata_query, cell_type_col):
 
     ref_labels = adata_ref.obs[cell_type_col].values
 
+    # Log-normalize using the FULL transcriptome so that library-size
+    # normalisation reflects the true sequencing depth of each cell.
+    # Subsetting to common genes first would artificially inflate expression
+    # values for genes that survive the intersection.
+    X_ref_norm = log_normalize(X_ref)
+    X_query_norm = log_normalize(X_query)
+
     # Find common genes
     common_genes = np.intersect1d(ref_genes, query_genes)
     print(f"    Common genes: {len(common_genes)}")
@@ -954,16 +1110,12 @@ def run_singler_prediction(adata_ref, adata_query, cell_type_col):
         print("    ERROR: Too few common genes!")
         return None
 
-    # Subset to common genes
+    # Subset normalised matrices to common genes
     ref_gene_idx = [np.where(ref_genes == g)[0][0] for g in common_genes]
     query_gene_idx = [np.where(query_genes == g)[0][0] for g in common_genes]
 
-    X_ref_common = X_ref[:, ref_gene_idx]
-    X_query_common = X_query[:, query_gene_idx]
-
-    # Log-normalize
-    X_ref_norm = log_normalize(X_ref_common)
-    X_query_norm = log_normalize(X_query_common)
+    X_ref_norm = X_ref_norm[:, ref_gene_idx]
+    X_query_norm = X_query_norm[:, query_gene_idx]
 
     # Remove NaN labels from reference
     valid_ref = pd.notna(ref_labels)
@@ -1342,6 +1494,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                 'accuracy': metrics['accuracy'],
                 'ari': metrics['ari'],
                 'f1_macro': compute_f1(y_true, ct_pred),
+                'hpo_time_sec': 0.0,
                 'train_time_sec': train_time,
                 'inference_time_sec': infer_time,
                 'time_sec': train_time + infer_time,
@@ -1380,6 +1533,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, singler_pred),
+                    'hpo_time_sec': 0.0,
                     'train_time_sec': train_time,
                     'inference_time_sec': infer_time,
                     'time_sec': train_time + infer_time,
@@ -1415,6 +1569,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, sctab_pred),
+                    'hpo_time_sec': 0.0,
                     'train_time_sec': train_time,
                     'inference_time_sec': infer_time,
                     'time_sec': train_time + infer_time,
@@ -1464,7 +1619,48 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
 
             for clf_name, clf in classifiers.items():
                 try:
+                    # --------------------------------------------------
+                    # Optional HPO phase (RUN_HPO=True to enable)
+                    # CV search to find best params; refit=False so the
+                    # final fit below is timed separately.
+                    # --------------------------------------------------
+                    hpo_time = 0.0
+                    if RUN_HPO:
+                        hpo_param_grid = HPO_PARAM_GRIDS.get(clf_name, {})
+                        if hpo_param_grid:
+                            from sklearn.model_selection import (
+                                GridSearchCV, RandomizedSearchCV,
+                            )
+                            from sklearn.base import clone
+                            hpo_start = time.time()
+                            n_combos = 1
+                            for v in hpo_param_grid.values():
+                                n_combos *= len(v)
+                            base_for_search = clone(clf)
+                            if n_combos <= 20:
+                                search = GridSearchCV(
+                                    base_for_search, hpo_param_grid,
+                                    cv=N_HPO_CV_FOLDS, n_jobs=-1,
+                                    scoring='f1_macro', refit=False,
+                                )
+                            else:
+                                search = RandomizedSearchCV(
+                                    base_for_search, hpo_param_grid,
+                                    n_iter=15, cv=N_HPO_CV_FOLDS, n_jobs=-1,
+                                    random_state=42 + run_id,
+                                    scoring='f1_macro', refit=False,
+                                )
+                            search.fit(emb_ref, labels_ref)
+                            best_params = search.best_params_
+                            clf = clone(clf).set_params(**best_params)
+                            hpo_time = time.time() - hpo_start
+                            if run_id == 0:
+                                print(f"      HPO ({clf_name}): {best_params} "
+                                      f"in {hpo_time:.1f}s")
+
+                    # --------------------------------------------------
                     # Training: classifier fit (add to reference embedding time)
+                    # --------------------------------------------------
                     clf_train_start = time.time()
                     clf.fit(emb_ref, labels_ref)
                     clf_train_time = time.time() - clf_train_start
@@ -1487,9 +1683,10 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                         'accuracy': metrics['accuracy'],
                         'ari': metrics['ari'],
                         'f1_macro': f1_val,
+                        'hpo_time_sec': hpo_time,
                         'train_time_sec': total_train_time,
                         'inference_time_sec': total_infer_time,
-                        'time_sec': total_train_time + total_infer_time,
+                        'time_sec': hpo_time + total_train_time + total_infer_time,
                         'run': run_id,
                     })
 
@@ -1540,6 +1737,7 @@ def run_single_experiment(scenario, adata, study_col, cell_type_col, run_id=0,
                     'accuracy': metrics['accuracy'],
                     'ari': metrics['ari'],
                     'f1_macro': compute_f1(y_true, pred),
+                    'hpo_time_sec': 0.0,
                     'train_time_sec': total_train_time,
                     'inference_time_sec': total_infer_time,
                     'time_sec': total_train_time + total_infer_time,
@@ -1640,6 +1838,10 @@ def main():
 
         print("\n  Creating runtime comparison boxplot (train vs inference breakdown, per scenario)...")
         plot_timing_breakdown(df_results, output_dir=FIGURE_DIR)
+
+        if RUN_HPO:
+            print("\n  Creating HPO timing breakdown (HPO + training + inference, per scenario)...")
+            plot_timing_breakdown_with_hpo(df_results, output_dir=FIGURE_DIR)
 
         # Accumulative plots (aggregated across all scenarios)
         print("\n  Creating accumulative F1 plot (all datasets combined)...")

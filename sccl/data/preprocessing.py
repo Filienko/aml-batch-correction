@@ -69,16 +69,11 @@ def preprocess_data(
 
     logger.info(f"After filtering: {adata.n_obs} cells x {adata.n_vars} genes")
 
-    # Normalize
-    logger.info("Normalizing counts...")
-    sc.pp.normalize_total(adata, target_sum=target_sum)
-    sc.pp.log1p(adata)
-
-    # Store normalized data
-    adata.uns['log1p'] = True
-
-    # Select highly variable genes
-    logger.info(f"Selecting {n_top_genes} highly variable genes...")
+    # Select highly variable genes on raw counts.
+    # seurat_v3 models the mean-variance relationship using a negative binomial
+    # distribution and therefore requires raw integer counts as input.  Running
+    # it after normalize_total / log1p produces incorrect HVG rankings.
+    logger.info(f"Selecting {n_top_genes} highly variable genes (on raw counts)...")
     if batch_key is not None and batch_key in adata.obs:
         sc.pp.highly_variable_genes(
             adata,
@@ -92,6 +87,15 @@ def preprocess_data(
             n_top_genes=n_top_genes,
             flavor='seurat_v3',
         )
+
+    # Normalize and log-transform (after HVG selection to preserve raw counts
+    # for seurat_v3 above)
+    logger.info("Normalizing counts...")
+    sc.pp.normalize_total(adata, target_sum=target_sum)
+    sc.pp.log1p(adata)
+
+    # Store normalized data
+    adata.uns['log1p'] = True
 
     # Subset to HVGs
     adata = adata[:, adata.var['highly_variable']].copy()

@@ -57,4 +57,49 @@ def get_model(model_name: str, **kwargs) -> BaseModel:
     return model_class(**kwargs)
 
 
-__all__ = ['BaseModel', 'get_model', 'AVAILABLE_MODELS']
+def load_model(path: str) -> BaseModel:
+    """Load a saved SCCL model from disk (auto-detects model type).
+
+    Parameters
+    ----------
+    path : str
+        Directory created by ``model.save()``.
+
+    Returns
+    -------
+    model : BaseModel
+        Ready-to-predict model instance.
+
+    Examples
+    --------
+    >>> from sccl.models import load_model
+    >>> model = load_model('/tmp/my_rf_model')
+    >>> predictions = model.predict(adata_query)
+    """
+    import json
+    from pathlib import Path
+    from .sklearn import SklearnModel
+    from .scimilarity import SCimilarityModel
+
+    path = Path(path)
+
+    if (path / 'meta.json').exists():
+        # Sklearn-family model
+        with open(path / 'meta.json') as f:
+            meta = json.load(f)
+        class_name = meta.get('model_class', '')
+        if class_name == 'SCimilarityModel':
+            return SCimilarityModel.load(path)
+        return SklearnModel.load(path)
+
+    if (path / 'config.json').exists():
+        # SCimilarity model
+        return SCimilarityModel.load(path)
+
+    raise ValueError(
+        f"No recognised model files found in '{path}'. "
+        "Expected 'meta.json' (sklearn models) or 'config.json' (SCimilarity)."
+    )
+
+
+__all__ = ['BaseModel', 'get_model', 'load_model', 'AVAILABLE_MODELS']
