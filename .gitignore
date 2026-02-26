@@ -11,3 +11,12 @@ model_v1.1/
 *.png
 merlin_cxg_2023_05_15_sf-log1p_minimal/
 scTab-checkpoints/
+
+# Log files
+*.log
+
+# Browser cookies / session files
+cookies.txt
+
+# Experiment output text files (not source code)
+platform_comp.txt*

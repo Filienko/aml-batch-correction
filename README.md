@@ -1,106 +1,20 @@
 # SCCL: Single Cell Classification Library
 
-**A unified tool for single-cell RNA-seq classification with multiple models.** Easily classify cells, handle batch effects, and compare different methods through a simple interface.
+**A unified tool for single-cell RNA-seq cell type annotation with multiple models.**
+Easily classify cells, handle batch effects, and compare methods through a simple interface.
 
 ---
 
-## Active Experiment: Comprehensive Cell Type Annotation Benchmark
+## Table of Contents
 
-The primary experiment currently used to generate ALL of the figures in the paper is:
-
-```
-experiments/paper/exp_ensemble_embeddings.py
-```
-
-This script benchmarks state-of-the-art cell type annotation methods on the the reference/query dataset pairs based on van Galen et al. (2019) and Zheng68k datasets. Results are saved to `experiments/paper/results/`.
-
-### What It Does
-
-#### 1. Methods Compared
-
-| Method | Type | Training Step |
-|---|---|---|
-| **CellTypist** | Reference-based logistic regression | Fit on reference cells |
-| **SCimilarity + Classifiers** | Embedding-based (KNN, LogReg, RF, MLP, Ensemble) | Embed reference → fit classifier |
-| **SingleR** | Correlation-based label transfer | None (correlation at inference time) |
-| **scTab** | Zero-shot foundation model | None (pre-trained checkpoint) |
-
-Each method is trained (where applicable) on a **reference** dataset and evaluated on a held-out **query** dataset. No method sees query labels during training.
-
-#### 2. Dataset Configuration
-
-The benchmark currently runs on the Acute Myeloid Leukemia (AML) specific dataset compield by **Whittle et al. (2025)** and generalist **Zheng 68k PBMC** dataset, split into pre-defined train/test files, i.e.:
-
-```
-experiments/paper/benchmark_data/zheng_train.h5ad   ← reference (train)
-experiments/paper/benchmark_data/zheng_test.h5ad    ← query (test)
-```
-
-The `SCENARIOS` list in the script controls which dataset pairs are run. To switch to AML Atlas cross-study scenarios, replace `SCENARIOS = ZHENG_SCENARIOS` with AML-style entries using `reference`/`query` study name keys.
-
-#### 3. Repeated Runs for Statistical Robustness
-
-Each scenario is repeated `N_RUNS = 5` times with different random seeds (for subsampling and classifier initialization), producing distributions rather than point estimates. This enables box-whisker plots with meaningful variance.
-
-#### 4. Timing Measurement
-
-Each method's timing is measured and separated into two phases:
-- **Training time**: reference preprocessing + embedding (SCimilarity) or model fitting
-- **Inference time**: query preprocessing + embedding (SCimilarity) or prediction + neighbor refinement
-
-Timing for each SCimilarity variant (e.g., `SCimilarity-mlp`) reflects the full cost of deploying that specific variant from scratch, including the shared embedding step.
-
-#### 5. Outputs
-
-All figures and CSVs are saved to `experiments/paper/results/`:
-
-| Output file | Description |
-|---|---|
-| `figures/umap_SCimilarity_mlp_*.png` | UMAP: ground truth vs MLP predictions (run 1 only) |
-| `figures/methods_f1_macro_*.png` | Box-whisker: F1 per method, per scenario |
-| `figures/methods_time_sec_*.png` | Stacked bar: training vs inference time, per scenario |
-| `figures/accumulative_f1_all_datasets.png` | Box-whisker: F1 aggregated across all scenarios |
-| `figures/accumulative_time_all_datasets.png` | Stacked bar: average runtime across all scenarios |
-| `figures/percelltype_SCimilarity_mlp_*.png` | Box-whisker: per-cell-type F1 for SCimilarity-MLP |
-| `comprehensive_benchmark_results.csv` | Full per-run results table |
-| `percelltype_f1_results.csv` | Per-cell-type F1 per run for SCimilarity-MLP |
-| `benchmark_summary.csv` | Mean ± std aggregated by scenario and method |
-
-#### 6. Configuration
-
-Key settings at the top of `exp_ensemble_embeddings.py`:
-
-```python
-MODEL_PATH = "..."          # Path to SCimilarity model weights
-BENCHMARK_DATA_DIR = ...    # Directory containing zheng_train.h5ad / zheng_test.h5ad
-SCTAB_CHECKPOINT = ...      # Path to scTab .ckpt file
-MERLIN_DIR = ...            # Path to scTab Merlin gene/cell-type metadata directory
-
-MAX_CELLS_PER_STUDY = 15000 # Subsample cap per dataset (None = use all)
-N_RUNS = 5                  # Repeated runs for box-whisker variance
-
-RUN_CELLTYPIST = True       # Toggle individual methods on/off
-RUN_SCIMILARITY = True
-RUN_SINGLER = True
-RUN_SCTAB = True
-```
-
-#### 7. Running the Experiment
-
-```bash
-cd /path/to/aml-batch-correction
-python experiments/paper/exp_ensemble_embeddings.py
-```
-
----
-
-## Library Overview
-
-SCCL provides a unified pipeline for:
-- **Cell type classification** using foundation models (SCimilarity, scVI) or traditional ML (Random Forest, SVM, KNN, Logistic Regression)
-- **Batch correction** for multi-study integration
-- **Label transfer** across datasets
-- **Model comparison** to find the best approach for your data
+1. [Installation](#installation)
+2. [Quick Start](#quick-start)
+3. [Python API](#python-api)
+4. [Available Models](#available-models)
+5. [Demos](#demos)
+6. [Data Format](#data-format)
+7. [Project Structure](#project-structure)
+8. [Benchmark Experiment](#benchmark-experiment)
 
 ---
 
@@ -111,148 +25,161 @@ git clone https://github.com/Filienko/aml-batch-correction.git
 cd aml-batch-correction
 pip install -e .
 
-# Optional: Install foundation models
-pip install scimilarity scvi-tools
+# Optional: install foundation model backends
+pip install scimilarity          # SCimilarity
+pip install scvi-tools           # scVI
+pip install celltypist           # CellTypist
 ```
 
 ---
 
 ## Quick Start
 
-```bash
-# Run the active benchmark experiment
-python experiments/paper/exp_ensemble_embeddings.py
+Run any demo to try the library immediately — no real data required, synthetic data is generated automatically:
 
-# Run interactive demos
+```bash
+# Compare sklearn models on synthetic data (no extra installs needed)
+python experiments/demos/02_model_comparison.py
+
+# Full annotation workflow: reference → query label transfer
 python experiments/demos/quickstart_annotation.py
-python experiments/demos/quickstart_embeddings.py
+
+# All numbered demos in sequence
 python experiments/demos/01_basic_prediction.py
+python experiments/demos/02_model_comparison.py
+python experiments/demos/03_batch_correction.py
+python experiments/demos/04_subset_analysis.py
 ```
 
 ---
 
-## Usage
+## Python API
 
-### Command Line
-TODO: replicate full functionality of the python API with CLI. Currently is not fully implemented.
+### Label Transfer (Reference → Query)
 
-```bash
-sccl evaluate --data data.h5ad --model scimilarity --target cell_type --test-size 0.2
-```
-
-
-### Python API
-
-SCimilarity works in two explicit stages: (1) project cells into a latent embedding space, then (2) train a separate sklearn classifier on those embeddings and apply it to new data. There is no single black-box `.predict()` — the experiment script (`exp_ensemble_embeddings.py`) uses it exactly like this:
+The core workflow: train on a labeled reference dataset, predict on an unlabeled query dataset.
 
 ```python
 import scanpy as sc
-from sklearn.neural_network import MLPClassifier
-from sklearn.neighbors import NearestNeighbors
-from collections import Counter
-import numpy as np
-
 from sccl import Pipeline
 from sccl.data import preprocess_data
+from sccl.evaluation import compute_metrics
 
-# Load separate reference (train) and query (test) datasets
+# Load your data
 adata_ref = sc.read_h5ad("reference.h5ad")
 adata_query = sc.read_h5ad("query.h5ad")
 
-# Step 1: Preprocess — stores raw counts in adata.raw, then normalizes/scales/PCA .X
-# get_embedding() reads from adata.raw when available, so this ensures it gets
-# true raw counts regardless of what is in .X. If your .X is already raw counts,
-# you can skip this and pass the AnnData directly.
-adata_ref_prep = preprocess_data(adata_ref.copy(), batch_key=None)
-adata_query_prep = preprocess_data(adata_query.copy(), batch_key=None)
+# Preprocess (normalise, log-transform, HVG, PCA)
+adata_ref_prep = preprocess_data(adata_ref.copy())
+adata_query_prep = preprocess_data(adata_query.copy())
 
-# Step 2: Extract SCimilarity embeddings.
-# get_embedding() handles all scimilarity-specific preprocessing internally:
-# gene alignment (align_dataset) and normalization (lognorm_counts).
-# It does NOT use the HVG/PCA in .X — it reads raw counts from .raw.
-pipeline = Pipeline(model='scimilarity', model_params={'model_path': 'path/to/model'})
-emb_ref   = pipeline.model.get_embedding(adata_ref_prep)   # (n_ref_cells, latent_dim)
-emb_query = pipeline.model.get_embedding(adata_query_prep) # (n_query_cells, latent_dim)
+# Train on reference, predict on query
+pipeline = Pipeline(model="random_forest")
+pipeline.model.fit(adata_ref_prep, target_column="cell_type")
+predictions = pipeline.model.predict(adata_query_prep)
 
-# Step 3: Train any sklearn classifier on reference embeddings
-clf = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=300, alpha=0.001, random_state=42)
-clf.fit(emb_ref, adata_ref.obs['cell_type'].values)
-
-# Step 4: Predict on query embeddings
-predictions = clf.predict(emb_query)
-
-# Optional Step 5: Refine with k-NN majority vote over query neighbours
-nn = NearestNeighbors(n_neighbors=50, n_jobs=-1).fit(emb_query)
-neighbour_idx = nn.kneighbors(emb_query, return_distance=False)
-predictions = np.array([
-    Counter(predictions[idx]).most_common(1)[0][0]
-    for idx in neighbour_idx
-])
+# Evaluate
+metrics = compute_metrics(y_true=adata_query.obs["cell_type"].values, y_pred=predictions)
+print(metrics)
 ```
 
-If you want the embedding + classifier steps bundled together, `SCimilarityModel` (used internally by `Pipeline`) exposes a `fit` / `predict` interface that wraps the same flow:
+### Model Comparison
 
 ```python
-# Equivalent using the built-in SCimilarityModel wrapper
-pipeline = Pipeline(model='scimilarity', model_params={
-    'model_path': 'path/to/model',
-    'classifier': 'mlp',        # knn | logistic_regression | random_forest | mlp
-    'label_propagation': True,  # enables the k-NN majority-vote refinement step
-})
-pipeline.model.fit(adata_ref, target_column='cell_type')  # embeds ref + fits clf
-predictions = pipeline.model.predict(adata_query)          # embeds query + predicts
+from sccl import Pipeline
+from sccl.data import generate_synthetic_data
+
+adata = generate_synthetic_data(n_cells=2000, n_genes=1000)
+
+pipeline = Pipeline(model="random_forest")
+comparison = pipeline.compare_models(
+    adata=adata,
+    target_column="cell_type",
+    models=["random_forest", "svm", "logistic_regression", "knn"],
+    test_size=0.2,
+)
+print(comparison)
 ```
 
+### SCimilarity (Foundation Model)
 
-### Label Transfer (Cross-Study)
+SCimilarity works in two stages: project cells into a shared embedding space, then train a classifier on those embeddings.
+
+```python
+from sccl import Pipeline
+from sccl.data import preprocess_data
+
+pipeline = Pipeline(
+    model="scimilarity",
+    model_params={
+        "model_path": "/path/to/model_v1.1",
+        "classifier": "mlp",          # knn | logistic_regression | random_forest | mlp
+        "label_propagation": True,    # k-NN majority-vote refinement
+    },
+)
+
+adata_ref_prep = preprocess_data(adata_ref.copy())
+adata_query_prep = preprocess_data(adata_query.copy())
+
+pipeline.model.fit(adata_ref_prep, target_column="cell_type")
+predictions = pipeline.model.predict(adata_query_prep)
+```
+
+You can also access the raw embeddings directly:
+
+```python
+emb_ref = pipeline.model.get_embedding(adata_ref_prep)    # (n_cells, latent_dim)
+emb_query = pipeline.model.get_embedding(adata_query_prep)
+```
+
+### Subsetting Data
 
 ```python
 from sccl.data import subset_data
 
-adata_ref = subset_data(adata, studies=['study1'])
-adata_query = subset_data(adata, studies=['study2'])
+# Split by study
+adata_ref = subset_data(adata, studies=["study_A", "study_B"])
+adata_query = subset_data(adata, studies=["study_C"])
 
-pipeline = Pipeline(model="random_forest")
-pipeline.model.fit(adata_ref, target_column='cell_type')
-predictions = pipeline.model.predict(adata_query)
+# Filter to specific cell types
+adata_immune = subset_data(adata, cell_types=["T cell", "B cell", "NK cell"])
 ```
 
 ---
 
 ## Available Models
 
-| Model | Type | Training | Batch Correction |
-|-------|------|----------|-----------------|
-| `scimilarity` | Foundation | None | Yes |
-| `scvi` | Deep Learning | Required | Yes |
-| `random_forest` | Traditional ML | Required | No |
-| `svm` | Traditional ML | Required | No |
-| `logistic_regression` | Traditional ML | Required | No |
-| `knn` | Instance-based | None | No |
+| Model key | Type | Needs training | Batch correction |
+|-----------|------|:--------------:|:----------------:|
+| `random_forest` | Traditional ML | Yes | No |
+| `svm` | Traditional ML | Yes | No |
+| `logistic_regression` | Traditional ML | Yes | No |
+| `knn` | Instance-based | No | No |
+| `scimilarity` | Foundation model | No (embedding) | Yes |
+| `scvi` | Deep learning | Yes | Yes |
+| `celltypist` | Pre-trained LR | Optional | No |
 
 ---
 
-## Project Structure
+## Demos
 
-```
-aml-batch-correction/
-├── sccl/                          # Main package
-│   ├── pipeline.py
-│   ├── models/
-│   ├── data/
-│   ├── evaluation/
-│   └── cli/
-├── experiments/
-│   ├── paper/
-│   │   ├── exp_ensemble_embeddings.py   ← Active benchmark experiment
-│   │   ├── benchmark_data/              ← zheng_train.h5ad, zheng_test.h5ad
-│   │   └── results/                     ← Output CSVs and figures
-│   └── demos/
-│       ├── 01_basic_prediction.py
-│       ├── 02_model_comparison.py
-│       └── generate_synthetic_data.py
-├── setup.py
-└── README.md
+All demos live in `experiments/demos/` and use synthetic data, so they run without any real datasets.
+
+| Script | What it shows |
+|--------|---------------|
+| `01_basic_prediction.py` | SCimilarity embedding + KNN label transfer (falls back to Random Forest) |
+| `02_model_comparison.py` | Compare RF, SVM, LR, KNN side-by-side |
+| `03_batch_correction.py` | UMAP before/after SCimilarity batch correction |
+| `04_subset_analysis.py` | Subsetting by batch/cell-type, cross-study eval |
+| `quickstart_annotation.py` | Full multi-model annotation workflow |
+| `quickstart_embeddings.py` | Using embeddings for clustering and classification |
+| `demo_celltypist.py` | CellTypist pre-trained and custom model usage |
+| `demo_run.ipynb` | Interactive Jupyter notebook walkthrough |
+
+Run all demos automatically:
+
+```bash
+bash experiments/demos/test_all_demos.sh
 ```
 
 ---
@@ -261,37 +188,116 @@ aml-batch-correction/
 
 SCCL works with **AnnData** (`.h5ad`) files:
 
-**Required:**
+**Required**
 - Expression matrix in `.X`
-- Cell metadata in `.obs` with target column (e.g., `cell_type`)
+- Cell metadata in `.obs` with a target column (e.g., `cell_type`)
 
-**Optional:**
+**Optional**
 - Batch/study column in `.obs` (e.g., `batch`, `study`)
-- Raw counts in `.raw`
+- Raw counts in `.raw` (used by SCimilarity; `preprocess_data` stores them there automatically)
+
+Column names are detected automatically from common variants (`cell_type`, `Cell Type`, `label`, etc.).
+
+---
+
+## Project Structure
+
+```
+aml-batch-correction/
+├── sccl/                          # Main package
+│   ├── pipeline.py                # Pipeline class (entry point)
+│   ├── models/                    # Model implementations
+│   │   ├── scimilarity.py
+│   │   ├── sklearn.py             # RF, SVM, LR, KNN
+│   │   ├── scvi.py
+│   │   └── celltypist.py
+│   ├── data/                      # Loading, preprocessing, synthetic generation
+│   └── evaluation/                # Metrics and visualisation
+├── experiments/
+│   ├── paper/
+│   │   ├── exp_ensemble_embeddings.py   <- Active benchmark (generates paper figures)
+│   │   ├── benchmark_data/              <- zheng_train.h5ad, zheng_test.h5ad
+│   │   └── results/                     <- Output CSVs and figures
+│   ├── demos/                     # Quick-start examples (see table above)
+│   ├── scvi_loader.py             # Utility: load pre-computed scVI embeddings
+│   └── inspect_data.py            # Utility: data inspection helper
+├── setup.py
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Benchmark Experiment
+
+The experiment used to generate all figures in the paper is:
+
+```bash
+python experiments/paper/exp_ensemble_embeddings.py
+```
+
+It benchmarks four methods (CellTypist, SCimilarity+classifiers, SingleR, scTab) on the AML scAtlas and Zheng 68k PBMC datasets, with five repeated runs per scenario for statistical robustness.
+
+### Configuration (top of `exp_ensemble_embeddings.py`)
+
+```python
+MODEL_PATH         = "..."   # SCimilarity model weights
+BENCHMARK_DATA_DIR = ...     # Directory with zheng_train.h5ad / zheng_test.h5ad
+SCTAB_CHECKPOINT   = ...     # scTab .ckpt file
+MERLIN_DIR         = ...     # scTab Merlin metadata directory
+
+MAX_CELLS_PER_STUDY = 15000   # Subsample cap (None = use all)
+N_RUNS = 5                    # Repeated runs for box-whisker variance
+
+RUN_CELLTYPIST  = True
+RUN_SCIMILARITY = True
+RUN_SINGLER     = True
+RUN_SCTAB       = True
+```
+
+### Methods Compared
+
+| Method | Type | Training step |
+|--------|------|---------------|
+| CellTypist | Reference-based logistic regression | Fit on reference |
+| SCimilarity + classifiers | Embedding-based (KNN, LogReg, RF, MLP, Ensemble) | Embed reference -> fit classifier |
+| SingleR | Correlation-based label transfer | None |
+| scTab | Zero-shot foundation model | None (pre-trained checkpoint) |
+
+### Outputs (`experiments/paper/results/`)
+
+| File | Description |
+|------|-------------|
+| `comprehensive_benchmark_results.csv` | Full per-run results |
+| `benchmark_summary.csv` | Mean +/- std by scenario and method |
+| `percelltype_f1_results.csv` | Per-cell-type F1 for SCimilarity-MLP |
+| `figures/methods_f1_macro_*.png` | Box-whisker: F1 per method |
+| `figures/methods_time_sec_*.png` | Stacked bar: training vs inference time |
+| `figures/accumulative_f1_all_datasets.png` | F1 aggregated across all scenarios |
 
 ---
 
 ## Requirements
 
 - Python >= 3.8
-- numpy, pandas, scipy, scikit-learn
-- anndata, scanpy
-- matplotlib, seaborn
+- numpy, pandas, scipy, scikit-learn, anndata, scanpy, matplotlib, seaborn
 
-**For specific methods:**
+Optional (for specific models):
 - `scimilarity` — SCimilarity foundation model
-- `scvi-tools` — scVI model
-- `singler` — SingleR annotation
-- `torch`, `cellnet` — scTab zero-shot model
+- `scvi-tools` — scVI deep learning model
+- `celltypist` — CellTypist pre-trained models
+- `singler` — SingleR label transfer
+- `torch` — scTab zero-shot model
 
 ---
 
 ## Acknowledgments
 
 - [SCimilarity](https://github.com/Genentech/scimilarity)
-- [scVI](https://scvi-tools.org/)
+- [scVI-tools](https://scvi-tools.org/)
+- [CellTypist](https://www.celltypist.org/)
 - [scanpy](https://scanpy.readthedocs.io/)
 
 ## License
 
-MIT License — See LICENSE file for details.
+MIT License — see [LICENSE](LICENSE) for details.
