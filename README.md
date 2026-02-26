@@ -9,12 +9,13 @@ Easily classify cells, handle batch effects, and compare methods through a simpl
 
 1. [Installation](#installation)
 2. [Quick Start](#quick-start)
-3. [Python API](#python-api)
-4. [Available Models](#available-models)
-5. [Demos](#demos)
-6. [Data Format](#data-format)
-7. [Project Structure](#project-structure)
-8. [Benchmark Experiment](#benchmark-experiment)
+3. [CLI](#cli)
+4. [Python API](#python-api)
+5. [Available Models](#available-models)
+6. [Demos](#demos)
+7. [Data Format](#data-format)
+8. [Project Structure](#project-structure)
+9. [Benchmark Experiment](#benchmark-experiment)
 
 ---
 
@@ -50,6 +51,43 @@ python experiments/demos/02_model_comparison.py
 python experiments/demos/03_batch_correction.py
 python experiments/demos/04_subset_analysis.py
 ```
+
+---
+
+## CLI
+
+After `pip install -e .`, the `sccl` command is available. Column names (`--target`, `--batch-key`) are auto-detected when omitted.
+
+```bash
+# Inspect a dataset
+sccl info --data my_data.h5ad
+
+# List available models
+sccl list-models
+
+# Generate synthetic test data
+sccl generate -o synthetic.h5ad --n-cells 2000
+
+# Evaluate a model (auto train/test split)
+sccl evaluate --data synthetic.h5ad --model random_forest
+
+# Label transfer: train on reference, predict on query
+sccl predict --reference ref.h5ad --data query.h5ad --model random_forest -o preds.csv
+
+# Train/test split on a single file
+sccl predict --data data.h5ad --model svm --test-size 0.2
+
+# Compare models side-by-side
+sccl compare --data data.h5ad --models random_forest,svm,knn,logistic_regression
+
+# Pass model hyperparameters
+sccl evaluate --data data.h5ad --model random_forest --model-params n_estimators=200,max_depth=10
+
+# Run from YAML config
+sccl run --config experiments/demos/example_config.yaml
+```
+
+Use `-v` / `--verbose` on any command for debug logging, and `-o` / `--output` to save results.
 
 ---
 

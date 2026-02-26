@@ -8,8 +8,8 @@ the SCCL pipeline without needing large real datasets.
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repo root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sccl.data import generate_synthetic_data
 
@@ -40,7 +40,7 @@ print("\nBatch distribution:")
 print(adata.obs['batch'].value_counts())
 
 # Save
-output_dir = Path(__file__).parent.parent / "data"
+output_dir = Path(__file__).parent.parent.parent / "data"
 output_dir.mkdir(exist_ok=True)
 
 output_file = output_dir / "synthetic_example.h5ad"
@@ -49,4 +49,4 @@ adata.write_h5ad(output_file)
 print(f"\nSaved synthetic data to: {output_file}")
 print("\nYou can now use this data with the SCCL pipeline!")
 print("\nExample:")
-print(f"  sccl predict --data {output_file} --model random_forest --target cell_type")
+print(f"  sccl evaluate --data {output_file} --model random_forest --target cell_type")

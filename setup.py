@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 from pathlib import Path
 
 # Read README
-readme_file = Path(__file__).parent / "sccl" / "README.md"
+readme_file = Path(__file__).parent / "README.md"
 if readme_file.exists():
     long_description = readme_file.read_text()
 else:
@@ -31,7 +31,8 @@ else:
 extras_require = {
     'scimilarity': ['scimilarity'],
     'scvi': ['scvi-tools>=1.0.0'],
-    'all': ['scimilarity', 'scvi-tools>=1.0.0'],
+    'celltypist': ['celltypist'],
+    'all': ['scimilarity', 'scvi-tools>=1.0.0', 'celltypist'],
     'dev': ['pytest', 'black', 'flake8', 'sphinx'],
 }
 
@@ -41,8 +42,8 @@ setup(
     description='Single Cell Classification Library',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='Daniil Filienko',
+    author_email='daniil.filienko@example.com',
     url='https://github.com/Filienko/aml-batch-correction',
     packages=find_packages(exclude=['tests', 'examples', 'docs']),
     install_requires=requirements,
