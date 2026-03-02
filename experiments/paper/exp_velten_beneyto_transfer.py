@@ -762,11 +762,19 @@ def compute_knn_purity(embeddings: np.ndarray, fine_labels, k: int = 30) -> dict
 
 def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
                                 novel_types: set) -> dict:
-    """Distance from each novel type's centroid to the nearest non-novel centroid.
+    """Relative centroid separation for each novel type.
 
-    A large distance in SCimilarity vs PCA means the foundation model places
-    the novel type in a genuinely distinct region of latent space, even without
-    seeing that type during training.
+    For each novel type, compute the distance from its centroid to the nearest
+    non-novel centroid, then divide by the mean pairwise centroid distance
+    across **all** types in this embedding.
+
+    Normalising by the mean pairwise distance makes the metric dimensionless
+    and comparable across embedding spaces (SCimilarity latent space vs PCA
+    components): a value of 1.0 means "as far as types are on average", 2.0
+    means "twice as far from the nearest normal centroid as types typically are
+    from each other".  Without this normalisation, raw Euclidean distances in
+    PCA space (large-variance gene expression) are always ~20–100× larger than
+    those in the compact SCimilarity latent space, making comparison meaningless.
 
     Parameters
     ----------
@@ -776,7 +784,8 @@ def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
 
     Returns
     -------
-    separation : dict  {novel_type -> min_distance_to_any_non_novel_centroid}
+    separation : dict  {novel_type -> relative_separation}
+        Values are dimensionless fractions of the mean inter-centroid distance.
     """
     from scipy.spatial.distance import cdist
 
@@ -787,8 +796,17 @@ def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
     if not normal_types:
         return {}
 
-    centroids       = {ct: embeddings[fine_labels == ct].mean(axis=0)
-                       for ct in all_types if (fine_labels == ct).any()}
+    centroids = {ct: embeddings[fine_labels == ct].mean(axis=0)
+                 for ct in all_types if (fine_labels == ct).any()}
+
+    # Normalisation factor: mean pairwise centroid distance in this space
+    all_ctrs = np.stack(list(centroids.values()))
+    pw       = cdist(all_ctrs, all_ctrs, metric='euclidean')
+    n_ctrs   = len(all_ctrs)
+    triu_idx = np.triu_indices(n_ctrs, k=1)
+    mean_pw  = float(pw[triu_idx].mean()) if len(triu_idx[0]) > 0 else 1.0
+    mean_pw  = max(mean_pw, 1e-10)   # guard against degenerate embeddings
+
     normal_centroids = np.stack([centroids[t] for t in normal_types
                                  if t in centroids])
 
@@ -798,7 +816,7 @@ def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
             continue
         dists          = cdist(centroids[ct].reshape(1, -1),
                                normal_centroids, metric='euclidean')[0]
-        separation[ct] = float(dists.min())
+        separation[ct] = float(dists.min()) / mean_pw
     return separation
 
 
@@ -929,15 +947,20 @@ def plot_knn_purity_comparison(purity_scim: dict, purity_pca: dict,
 def plot_centroid_separation(sep_scim: dict, sep_pca: dict,
                               novel_types: set, direction: str,
                               output_dir=None):
-    """Grouped bar: centroid distance to nearest non-novel type, SCimilarity vs PCA.
+    """Grouped bar: relative centroid separation, SCimilarity vs PCA baseline.
 
-    A larger distance in SCimilarity than in PCA shows the foundation model
-    places novel types in a genuinely distinct region of latent space, even
-    without having seen those types at training time.
+    Each bar shows the distance from the novel type's centroid to its nearest
+    non-novel centroid, divided by the mean pairwise centroid distance in that
+    embedding space.  This normalisation makes SCimilarity and PCA values
+    directly comparable despite their different coordinate scales.
+
+    Values > 1.0 mean the novel type sits farther from normal types than the
+    average inter-type centroid distance — i.e. it forms a genuinely distinct
+    cluster.
 
     Parameters
     ----------
-    sep_scim, sep_pca : dict  {cell_type -> distance}
+    sep_scim, sep_pca : dict  {cell_type -> relative_separation}
     novel_types : set of str
     direction : str
     output_dir : Path, optional
@@ -966,10 +989,11 @@ def plot_centroid_separation(sep_scim: dict, sep_pca: dict,
             label.set_color(_TYPE_COLORS.get('intermediate', '#E65100'))
             label.set_fontweight('bold')
 
-    ax.set_ylabel('Distance to nearest non-novel centroid', fontsize=11,
-                  fontweight='bold')
-    ax.set_title(f'Centroid Separation — {direction}\n'
-                 f'(larger gap in SCimilarity → more distinct latent cluster)',
+    ax.set_ylabel('Relative separation\n(× mean pairwise centroid distance)',
+                  fontsize=11, fontweight='bold')
+    ax.set_title(f'Relative Centroid Separation — {direction}\n'
+                 f'(normalised to mean inter-centroid distance; '
+                 f'>1.0 → more distinct than average)',
                  fontsize=12, fontweight='bold', pad=10)
     ax.legend(fontsize=10, frameon=True)
     ax.yaxis.grid(True, linestyle='--', alpha=0.5)
@@ -1054,8 +1078,9 @@ def analyze_novel_type_separation(adata_query, emb_scimilarity: np.ndarray,
                                            set(present_novel))
     for ct in present_novel:
         print(f"    {ct:50s}  "
-              f"SCimilarity dist={sep_scim.get(ct, float('nan')):.3f}  "
-              f"PCA dist={sep_pca.get(ct, float('nan')):.3f}")
+              f"SCimilarity rel={sep_scim.get(ct, float('nan')):.3f}  "
+              f"PCA rel={sep_pca.get(ct, float('nan')):.3f}  "
+              f"(× mean pairwise centroid dist)")
 
     # ---- UMAP (optional) ----
     try:
