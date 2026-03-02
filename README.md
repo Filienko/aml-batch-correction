@@ -16,6 +16,7 @@ Easily classify cells, handle batch effects, and compare methods through a simpl
 7. [Data Format](#data-format)
 8. [Project Structure](#project-structure)
 9. [Benchmark Experiment](#benchmark-experiment)
+10. [Cross-Dataset Transfer Experiment (Velten ↔ Beneyto)](#cross-dataset-transfer-experiment-velten--beneyto)
 
 ---
 
@@ -253,9 +254,10 @@ aml-batch-correction/
 │   └── evaluation/                # Metrics and visualisation
 ├── experiments/
 │   ├── paper/
-│   │   ├── exp_ensemble_embeddings.py   <- Active benchmark (generates paper figures)
-│   │   ├── benchmark_data/              <- zheng_train.h5ad, zheng_test.h5ad
-│   │   └── results/                     <- Output CSVs and figures
+│   │   ├── exp_ensemble_embeddings.py         <- Active benchmark (generates paper figures)
+│   │   ├── exp_velten_beneyto_transfer.py     <- Cross-dataset AML transfer experiment
+│   │   ├── benchmark_data/                    <- zheng_train.h5ad, zheng_test.h5ad
+│   │   └── results/                           <- Output CSVs and figures
 │   ├── demos/                     # Quick-start examples (see table above)
 │   ├── scvi_loader.py             # Utility: load pre-computed scVI embeddings
 │   └── inspect_data.py            # Utility: data inspection helper
@@ -312,6 +314,87 @@ RUN_SCTAB       = True
 | `figures/methods_f1_macro_*.png` | Box-whisker: F1 per method |
 | `figures/methods_time_sec_*.png` | Stacked bar: training vs inference time |
 | `figures/accumulative_f1_all_datasets.png` | F1 aggregated across all scenarios |
+
+---
+
+## Cross-Dataset Transfer Experiment (Velten ↔ Beneyto)
+
+`experiments/paper/exp_velten_beneyto_transfer.py` tests whether foundation
+model embeddings outperform discrete-signature methods (CellTypist, SingleR)
+when predicting **intermediate and pre-cancerous AML cell types** that live on
+a continuum between normal progenitor states.
+
+### Scientific argument
+
+CellTypist maps each cell to a fixed gene-signature — this works well for
+canonical, well-separated types but degrades for blast cells arrested at
+ambiguous differentiation stages.  SCimilarity's continuous embedding space
+preserves the biological gradient, so a blast that is "between" an HSC and
+an early myeloid progenitor lands between those clusters and is assigned the
+biologically closest label.
+
+### How to run
+
+**1. Set data paths** at the top of the script:
+
+```python
+BENEYTO_PATH = Path("/path/to/beneyto.h5ad")   # 101k AML + haematopoiesis cells
+VELTEN_PATH  = Path("/path/to/velten.h5ad")     # 5.2k AML blast subtypes
+MODEL_PATH   = "/path/to/model_v1.1"            # SCimilarity weights directory
+```
+
+**2. Choose which methods to run** (all enabled by default):
+
+```python
+RUN_SCIMILARITY = True
+RUN_CELLTYPIST  = True
+RUN_SINGLER     = True   # requires `pip install singler`
+```
+
+**3. Execute:**
+
+```bash
+python experiments/paper/exp_velten_beneyto_transfer.py
+```
+
+Results are written to `experiments/paper/results/` and figures to
+`experiments/paper/results/figures/`.
+
+### Outputs
+
+| File | Description |
+|------|-------------|
+| `per_celltype_accuracy_B2V_<method>.csv` | Per-cell-type accuracy, Beneyto→Velten |
+| `per_celltype_accuracy_V2B_<method>.csv` | Per-cell-type accuracy, Velten→Beneyto |
+| `summary_B2V.csv` / `summary_V2B.csv` | Overall metrics (accuracy, ARI, F1-macro) |
+| `figures/per_celltype_accuracy_*.png` | Horizontal bars per cell type (intermediate types highlighted) |
+| `figures/overall_metrics_*.png` | Grouped bar: accuracy / ARI / F1 per method |
+| `figures/continuous_advantage_*.png` | Scatter: SCimilarity vs CellTypist per-type accuracy |
+| `figures/intermediate_confusion_*.png` | Stacked bar: predicted category distribution for intermediate types |
+| `figures/umap_novel_*.png` | UMAP with novel/absent types highlighted in bright colours |
+| `figures/knn_purity_*.png` | kNN purity (SCimilarity vs PCA) — tests latent clustering of novel types |
+| `figures/centroid_separation_*.png` | Centroid distance to nearest normal type (SCimilarity vs PCA) |
+
+### Novel type separation analysis
+
+The experiment also quantifies whether SCimilarity **recognises** cell types
+that were entirely absent from training, even when it assigns them the wrong
+harmonised label.  For each such "novel type" (Velten blast subtypes when
+training on Beneyto; Beneyto intermediate progenitors when training on Velten):
+
+- **kNN purity** — fraction of k=30 nearest neighbours in embedding space that
+  share the same fine-grained label.  High purity despite wrong classification
+  → tight distinct cluster without a matching training label.
+- **Centroid separation** — distance from the novel type's embedding centroid
+  to the nearest normal-type centroid.  Larger gap in SCimilarity vs PCA →
+  the foundation model places the novel type in a genuinely distinct latent
+  region.
+
+Optional: install `umap-learn` for UMAP visualisations:
+
+```bash
+pip install umap-learn
+```
 
 ---
 

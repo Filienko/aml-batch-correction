@@ -52,6 +52,20 @@ Outputs (FIGURE_DIR)
    For each intermediate/blast type, stacked bar of predicted categories
    (SCimilarity vs CellTypist) to show biologically coherent vs incoherent
    errors.
+5. umap_novel_<direction>.png
+   UMAP of SCimilarity embeddings coloured by fine-grained label; novel /
+   absent types drawn in bright colours, all other types in muted grey.
+   Even when the classifier assigns the wrong harmonised label, tight clusters
+   for novel types indicate the embedding preserves their biological identity.
+6. knn_purity_<direction>.png
+   kNN purity (fraction of k=30 nearest neighbours sharing the same
+   fine-grained label) for each cell type in SCimilarity embedding vs PCA
+   baseline.  Novel types are highlighted; high purity in SCimilarity despite
+   low accuracy implies the model recognises the type even if it lacks a label.
+7. centroid_separation_<direction>.png
+   Distance between a novel type's embedding centroid and the nearest
+   non-novel-type centroid.  Larger separation in SCimilarity vs PCA shows the
+   foundation model places novel types in a distinct region of latent space.
 """
 
 import sys
@@ -217,6 +231,13 @@ INTERMEDIATE_BENEYTO = {
     'Erythro-myeloid progenitors',
     'Eosinophil-basophil-mast cell progenitors',
 }
+
+# Novel types: present in the query but absent (as fine-grained labels) from
+# the reference dataset.  Even if the classifier assigns an incorrect
+# harmonised label, tight distinct clusters in the embedding indicate the
+# foundation model has captured the biology without supervision.
+NOVEL_TYPES_VELTEN  = INTERMEDIATE_VELTEN | BLAST_VELTEN
+NOVEL_TYPES_BENEYTO = INTERMEDIATE_BENEYTO
 
 
 def _velten_type_category(t):
@@ -697,6 +718,365 @@ def plot_intermediate_confusion(results_dict, fine_labels, harmonised_categories
 
 
 # ==============================================================================
+# NOVEL TYPE SEPARATION ANALYSIS
+# ==============================================================================
+
+def compute_knn_purity(embeddings: np.ndarray, fine_labels, k: int = 30) -> dict:
+    """Per-type mean kNN purity in an embedding space.
+
+    For each cell, compute the fraction of its k nearest neighbours (excluding
+    itself) that share the same fine-grained label.  Return the mean purity
+    over all cells of each type.
+
+    A high purity value for a novel type — even when the classifier assigns
+    it the wrong harmonised label — shows the embedding has clustered those
+    cells together, indicating latent recognition of the biology.
+
+    Parameters
+    ----------
+    embeddings : ndarray, shape (n_cells, n_dims)
+    fine_labels : array-like, shape (n_cells,)
+    k : int
+        Number of nearest neighbours (self excluded).
+
+    Returns
+    -------
+    purity : dict  {cell_type -> mean_purity}
+    """
+    fine_labels = np.asarray(fine_labels)
+    k_eff = min(k, len(fine_labels) - 1)
+    nn   = NearestNeighbors(n_neighbors=k_eff + 1, n_jobs=-1).fit(embeddings)
+    nbrs = nn.kneighbors(embeddings, return_distance=False)[:, 1:]  # drop self
+
+    purity = {}
+    for ct in np.unique(fine_labels):
+        mask = fine_labels == ct
+        if mask.sum() < 2:
+            purity[ct] = 1.0
+            continue
+        nbr_labels  = fine_labels[nbrs[mask]]          # (n_ct, k_eff)
+        cell_purity = (nbr_labels == ct).mean(axis=1)
+        purity[ct]  = float(cell_purity.mean())
+    return purity
+
+
+def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
+                                novel_types: set) -> dict:
+    """Distance from each novel type's centroid to the nearest non-novel centroid.
+
+    A large distance in SCimilarity vs PCA means the foundation model places
+    the novel type in a genuinely distinct region of latent space, even without
+    seeing that type during training.
+
+    Parameters
+    ----------
+    embeddings : ndarray, shape (n_cells, n_dims)
+    fine_labels : array-like
+    novel_types : set of str
+
+    Returns
+    -------
+    separation : dict  {novel_type -> min_distance_to_any_non_novel_centroid}
+    """
+    from scipy.spatial.distance import cdist
+
+    fine_labels  = np.asarray(fine_labels)
+    all_types    = np.unique(fine_labels)
+    normal_types = [t for t in all_types if t not in novel_types]
+
+    if not normal_types:
+        return {}
+
+    centroids       = {ct: embeddings[fine_labels == ct].mean(axis=0)
+                       for ct in all_types if (fine_labels == ct).any()}
+    normal_centroids = np.stack([centroids[t] for t in normal_types
+                                 if t in centroids])
+
+    separation = {}
+    for ct in novel_types:
+        if ct not in centroids:
+            continue
+        dists          = cdist(centroids[ct].reshape(1, -1),
+                               normal_centroids, metric='euclidean')[0]
+        separation[ct] = float(dists.min())
+    return separation
+
+
+def plot_umap_novel_types(emb_2d: np.ndarray, fine_labels, novel_types: set,
+                          direction: str, output_dir=None):
+    """UMAP scatter: novel/absent types in bright colours, all others muted grey.
+
+    Parameters
+    ----------
+    emb_2d : ndarray, shape (n_cells, 2)   pre-computed 2-D UMAP coordinates
+    fine_labels : array-like
+    novel_types : set of str   types to highlight
+    direction : str
+    output_dir : Path, optional
+    """
+    fine_labels   = np.asarray(fine_labels)
+    present_novel = sorted(t for t in novel_types if t in fine_labels)
+
+    cmap_bright  = plt.cm.get_cmap('tab10', max(len(present_novel), 1))
+    novel_colors = {t: cmap_bright(i) for i, t in enumerate(present_novel)}
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    # Background: non-novel cells in light grey
+    bg_mask = ~np.isin(fine_labels, present_novel)
+    ax.scatter(emb_2d[bg_mask, 0], emb_2d[bg_mask, 1],
+               c='#BDBDBD', s=3, alpha=0.25, rasterized=True, label='Other types')
+
+    # Foreground: novel types in bright, distinct colours
+    for ct in present_novel:
+        mask = fine_labels == ct
+        ax.scatter(emb_2d[mask, 0], emb_2d[mask, 1],
+                   c=[novel_colors[ct]], s=18, alpha=0.80,
+                   label=ct, rasterized=True, zorder=3)
+
+    ax.set_xlabel('UMAP 1', fontsize=11)
+    ax.set_ylabel('UMAP 2', fontsize=11)
+    ax.set_title(f'SCimilarity Embedding — Novel / Absent Types\n{direction}',
+                 fontsize=12, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8,
+              markerscale=3, frameon=True,
+              title='Novel types (bright)\nOther types (grey)',
+              title_fontsize=8)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        fn   = output_dir / f"umap_novel_{safe}.png"
+        plt.savefig(fn, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved: {fn.name}")
+    else:
+        plt.show()
+
+
+def plot_knn_purity_comparison(purity_scim: dict, purity_pca: dict,
+                                fine_labels, novel_types: set,
+                                direction: str, output_dir=None):
+    """Grouped horizontal bar: kNN purity per cell type, SCimilarity vs PCA.
+
+    Novel/absent types are highlighted with an orange background band.
+    High purity in SCimilarity despite low classification accuracy is the
+    key signal: the model recognises the type even without a training label.
+
+    Parameters
+    ----------
+    purity_scim, purity_pca : dict  {cell_type -> mean_purity}
+    fine_labels : array-like
+    novel_types : set of str
+    direction : str
+    output_dir : Path, optional
+    """
+    fine_labels = np.asarray(fine_labels)
+    all_types   = sorted((t for t in purity_scim if t in purity_pca),
+                         key=lambda t: purity_scim[t])
+
+    n  = len(all_types)
+    bh = 0.35
+    y  = np.arange(n)
+
+    fig, ax = plt.subplots(figsize=(10, max(5, n * 0.45)))
+
+    # Highlight novel types with a warm band
+    for i, ct in enumerate(all_types):
+        if ct in novel_types:
+            ax.axhspan(i - 0.48, i + 0.48, color='#FFE0B2', alpha=0.45, zorder=0)
+
+    scim_vals = [purity_scim[t] for t in all_types]
+    pca_vals  = [purity_pca[t]  for t in all_types]
+
+    ax.barh(y + bh / 2, scim_vals, bh, label='SCimilarity',
+            color='#1976D2', alpha=0.85, edgecolor='white', linewidth=0.4, zorder=2)
+    ax.barh(y - bh / 2, pca_vals,  bh, label='PCA baseline',
+            color='#78909C', alpha=0.75, edgecolor='white', linewidth=0.4, zorder=2)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(all_types, fontsize=8)
+    for label, ct in zip(ax.get_yticklabels(), all_types):
+        if ct in novel_types:
+            label.set_color(_TYPE_COLORS.get('intermediate', '#E65100'))
+            label.set_fontweight('bold')
+
+    ax.set_xlim(0, 1.05)
+    ax.set_xlabel('Mean kNN purity (k=30)', fontsize=11, fontweight='bold')
+    ax.set_title(f'kNN Purity — SCimilarity vs PCA Baseline\n{direction}\n'
+                 f'(orange band = novel/absent types; '
+                 f'high purity → tighter cluster in embedding)',
+                 fontsize=11, fontweight='bold', pad=10)
+    ax.legend(fontsize=10, frameon=True, loc='lower right')
+    ax.xaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        fn   = output_dir / f"knn_purity_{safe}.png"
+        plt.savefig(fn, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved: {fn.name}")
+    else:
+        plt.show()
+
+
+def plot_centroid_separation(sep_scim: dict, sep_pca: dict,
+                              novel_types: set, direction: str,
+                              output_dir=None):
+    """Grouped bar: centroid distance to nearest non-novel type, SCimilarity vs PCA.
+
+    A larger distance in SCimilarity than in PCA shows the foundation model
+    places novel types in a genuinely distinct region of latent space, even
+    without having seen those types at training time.
+
+    Parameters
+    ----------
+    sep_scim, sep_pca : dict  {cell_type -> distance}
+    novel_types : set of str
+    direction : str
+    output_dir : Path, optional
+    """
+    types = sorted(t for t in sep_scim if t in sep_pca)
+    if not types:
+        return
+
+    x = np.arange(len(types))
+    w = 0.35
+
+    fig, ax = plt.subplots(figsize=(max(6, len(types) * 1.4), 5))
+
+    scim_vals = [sep_scim[t] for t in types]
+    pca_vals  = [sep_pca[t]  for t in types]
+
+    ax.bar(x - w / 2, scim_vals, w, label='SCimilarity',
+           color='#1976D2', alpha=0.85, edgecolor='white')
+    ax.bar(x + w / 2, pca_vals,  w, label='PCA baseline',
+           color='#78909C', alpha=0.75, edgecolor='white')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(types, rotation=35, ha='right', fontsize=9)
+    for label in ax.get_xticklabels():
+        if label.get_text() in novel_types:
+            label.set_color(_TYPE_COLORS.get('intermediate', '#E65100'))
+            label.set_fontweight('bold')
+
+    ax.set_ylabel('Distance to nearest non-novel centroid', fontsize=11,
+                  fontweight='bold')
+    ax.set_title(f'Centroid Separation — {direction}\n'
+                 f'(larger gap in SCimilarity → more distinct latent cluster)',
+                 fontsize=12, fontweight='bold', pad=10)
+    ax.legend(fontsize=10, frameon=True)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        fn   = output_dir / f"centroid_separation_{safe}.png"
+        plt.savefig(fn, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved: {fn.name}")
+    else:
+        plt.show()
+
+
+def analyze_novel_type_separation(adata_query, emb_scimilarity: np.ndarray,
+                                   novel_types: set, direction: str,
+                                   output_dir=None):
+    """Test whether SCimilarity embeddings cluster novel/absent types distinctly.
+
+    Even when a classifier assigns an incorrect harmonised label (because the
+    type was absent from training), tight distinct clusters in the embedding
+    space show that the foundation model has captured the underlying biology.
+
+    Produces three figures:
+      * UMAP coloured by novel types (if umap-learn is available)
+      * kNN purity comparison (SCimilarity vs PCA baseline)
+      * Centroid separation comparison (SCimilarity vs PCA baseline)
+
+    Parameters
+    ----------
+    adata_query : AnnData
+        Query dataset with obs['_raw_label'] (original fine-grained labels)
+        and .X containing the expression matrix used for the PCA baseline.
+    emb_scimilarity : np.ndarray, shape (n_cells, n_dims)
+        SCimilarity embeddings of the query cells.
+    novel_types : set of str
+        Fine-grained types absent from the reference (training) dataset.
+    direction : str
+        Direction label used for plot titles and file names.
+    output_dir : Path, optional
+    """
+    import scipy.sparse
+    from sklearn.decomposition import PCA
+
+    fine_labels   = adata_query.obs['_raw_label'].values
+    present_novel = sorted(t for t in novel_types if t in fine_labels)
+
+    if not present_novel:
+        print(f"  No novel types found in query for '{direction}'. Skipping.")
+        return
+
+    print(f"\n  Novel type separation analysis ({direction}):")
+    print(f"  Types analysed: {present_novel}")
+
+    # ---- PCA baseline on raw query expression ----
+    X_raw = adata_query.X
+    if scipy.sparse.issparse(X_raw):
+        X_raw = X_raw.toarray()
+    X_raw   = np.asarray(X_raw, dtype=np.float32)
+    n_comps = min(50, X_raw.shape[1] - 1, X_raw.shape[0] - 1)
+    emb_pca = PCA(n_components=n_comps, random_state=42).fit_transform(X_raw)
+    print(f"  PCA baseline: {emb_pca.shape}")
+
+    # ---- kNN purity ----
+    print("  Computing kNN purity (k=30)...")
+    purity_scim = compute_knn_purity(emb_scimilarity, fine_labels, k=30)
+    purity_pca  = compute_knn_purity(emb_pca,          fine_labels, k=30)
+    for ct in present_novel:
+        print(f"    {ct:50s}  "
+              f"SCimilarity={purity_scim.get(ct, float('nan')):.3f}  "
+              f"PCA={purity_pca.get(ct, float('nan')):.3f}")
+
+    # ---- Centroid separation ----
+    print("  Computing centroid separation...")
+    sep_scim = compute_centroid_separation(emb_scimilarity, fine_labels,
+                                           set(present_novel))
+    sep_pca  = compute_centroid_separation(emb_pca, fine_labels,
+                                           set(present_novel))
+    for ct in present_novel:
+        print(f"    {ct:50s}  "
+              f"SCimilarity dist={sep_scim.get(ct, float('nan')):.3f}  "
+              f"PCA dist={sep_pca.get(ct, float('nan')):.3f}")
+
+    # ---- UMAP (optional) ----
+    try:
+        import umap as umap_mod
+        print("  Computing UMAP...")
+        reducer = umap_mod.UMAP(n_components=2, random_state=42,
+                                n_jobs=1, verbose=False)
+        emb_2d  = reducer.fit_transform(emb_scimilarity)
+        plot_umap_novel_types(emb_2d, fine_labels, set(present_novel),
+                              direction, output_dir)
+    except ImportError:
+        print("  umap-learn not installed; skipping UMAP plot.")
+
+    # ---- Bar chart figures ----
+    plot_knn_purity_comparison(purity_scim, purity_pca, fine_labels,
+                               set(present_novel), direction, output_dir)
+    plot_centroid_separation(sep_scim, sep_pca, set(present_novel),
+                             direction, output_dir)
+
+
+# ==============================================================================
 # SINGLE EXPERIMENT RUN
 # ==============================================================================
 
@@ -721,6 +1101,7 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
 
     predictions    = {}
     overall_metrics = []
+    emb_query_out  = None   # set in SCimilarity block if run successfully
 
     def _metrics_row(method, preds):
         return {
@@ -739,6 +1120,7 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
             t0 = time.time()
             emb_ref   = get_scimilarity_embeddings(adata_ref,   MODEL_PATH)
             emb_query = get_scimilarity_embeddings(adata_query, MODEL_PATH)
+            emb_query_out = emb_query   # expose for novel-type analysis
             print(f"    Embeddings: ref {emb_ref.shape}, query {emb_query.shape}  "
                   f"({time.time()-t0:.1f}s)")
 
@@ -806,7 +1188,7 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
             print(f"    [SingleR] Acc {row['accuracy']:.3f}  ARI {row['ari']:.3f}  "
                   f"F1 {row['f1_macro']:.3f}  ({time.time()-t0:.1f}s)")
 
-    return predictions, overall_metrics
+    return predictions, overall_metrics, emb_query_out
 
 
 # ==============================================================================
@@ -865,7 +1247,7 @@ def main():
     print("Direction A: Train on Beneyto → Predict Velten")
     print("=" * 60)
 
-    preds_a, metrics_a = run_transfer(
+    preds_a, metrics_a, emb_a = run_transfer(
         adata_ref=adata_beneyto,
         adata_query=adata_velten,
         direction='Beneyto → Velten',
@@ -905,6 +1287,14 @@ def main():
             df.to_csv(OUTPUT_DIR / f"per_celltype_accuracy_B2V_{method}.csv",
                       index=False)
 
+    # Novel type separation: do Velten blast/intermediate types cluster
+    # distinctly in SCimilarity space even when labelled incorrectly?
+    if emb_a is not None:
+        analyze_novel_type_separation(
+            adata_velten, emb_a, NOVEL_TYPES_VELTEN,
+            'Beneyto → Velten', FIGURE_DIR,
+        )
+
     # -------------------------------------------------------------------------
     # Direction B: Velten → Beneyto  (supplementary)
     # -------------------------------------------------------------------------
@@ -912,7 +1302,7 @@ def main():
     print("Direction B: Train on Velten → Predict Beneyto")
     print("=" * 60)
 
-    preds_b, metrics_b = run_transfer(
+    preds_b, metrics_b, emb_b = run_transfer(
         adata_ref=adata_velten,
         adata_query=adata_beneyto,
         direction='Velten → Beneyto',
@@ -950,6 +1340,14 @@ def main():
             df['category'] = df['cell_type'].map(_beneyto_type_category)
             df.to_csv(OUTPUT_DIR / f"per_celltype_accuracy_V2B_{method}.csv",
                       index=False)
+
+    # Novel type separation: do Beneyto intermediate progenitors cluster
+    # distinctly in SCimilarity space even when trained only on Velten blasts?
+    if emb_b is not None:
+        analyze_novel_type_separation(
+            adata_beneyto, emb_b, NOVEL_TYPES_BENEYTO,
+            'Velten → Beneyto', FIGURE_DIR,
+        )
 
     # -------------------------------------------------------------------------
     # Summary printout
