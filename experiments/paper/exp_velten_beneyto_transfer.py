@@ -83,6 +83,8 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import seaborn as sns
+import scipy.stats
+from scipy.spatial.distance import cdist
 from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
@@ -258,6 +260,161 @@ def _beneyto_type_category(t):
 # ==============================================================================
 # DATA LOADING
 # ==============================================================================
+def plot_trajectory_interpolation(emb_ref, emb_query, labels_ref, labels_query, 
+                                  ct_prob_matrix, type_category_fn, direction, 
+                                  start_state='HSC/Progenitor', end_state='Monocyte',
+                                  output_dir=None):
+    """
+    Measures if intermediate blasts are correctly positioned between 
+    HSCs and mature states, comparing SCimilarity distances vs CellTypist probabilities.
+    """
+    # 1. SCimilarity Continuous Trajectory
+    # Find reference centroids
+    valid_ref = pd.notna(labels_ref)
+    emb_ref_v = emb_ref[valid_ref]
+    labels_ref_v = labels_ref[valid_ref]
+    
+    if start_state not in labels_ref_v or end_state not in labels_ref_v:
+        print(f"  Skipping interpolation plot: anchors {start_state} or {end_state} missing.")
+        return
+        
+    c_start = emb_ref_v[labels_ref_v == start_state].mean(axis=0).reshape(1, -1)
+    c_end = emb_ref_v[labels_ref_v == end_state].mean(axis=0).reshape(1, -1)
+    
+    # Calculate relative projection for query cells
+    dist_to_start = cdist(emb_query, c_start, metric='euclidean').flatten()
+    dist_to_end = cdist(emb_query, c_end, metric='euclidean').flatten()
+    scim_progression = dist_to_start / (dist_to_start + dist_to_end)
+    
+    # 2. CellTypist Discrete Probability Trajectory
+    # Assumes ct_prob_matrix is a DataFrame with column names matching reference states
+    if start_state in ct_prob_matrix.columns and end_state in ct_prob_matrix.columns:
+        p_start = ct_prob_matrix[start_state].values
+        p_end = ct_prob_matrix[end_state].values
+        # Add epsilon to avoid div-by-zero
+        ct_progression = p_end / (p_start + p_end + 1e-9)
+    else:
+        ct_progression = np.full(len(emb_query), np.nan)
+
+    # 3. Build DataFrame
+    df = pd.DataFrame({
+        'cell_type': labels_query,
+        'category': [type_category_fn(t) for t in labels_query],
+        'SCimilarity_Progression': scim_progression,
+        'CellTypist_Progression': ct_progression
+    })
+    
+    # Filter to intermediate and blast types
+    df_focus = df[df['category'].isin(['intermediate', 'blast'])]
+    if df_focus.empty: return
+
+    # 4. Plotting
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    
+    sns.kdeplot(data=df_focus, x='SCimilarity_Progression', hue='cell_type', 
+                fill=True, ax=axes[0], palette='YlOrRd', alpha=0.5)
+    axes[0].set_title('SCimilarity: Continuous Spatial Projection', fontweight='bold')
+    axes[0].set_xlabel(f'Relative Distance: {start_state} -> {end_state}')
+    axes[0].set_xlim(0, 1)
+    
+    sns.kdeplot(data=df_focus, x='CellTypist_Progression', hue='cell_type', 
+                fill=True, ax=axes[1], palette='YlOrRd', alpha=0.5)
+    axes[1].set_title('CellTypist: Relative Probability', fontweight='bold')
+    axes[1].set_xlabel(f'Relative Probability: {start_state} -> {end_state}')
+    axes[1].set_xlim(0, 1)
+
+    fig.suptitle(f'Trajectory Interpolation of Ambiguous Blasts\n{direction}', fontweight='bold')
+    plt.tight_layout()
+    
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        plt.savefig(output_dir / f"trajectory_interpolation_{safe}.png", dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_cross_dataset_mixing(emb_ref, emb_query, labels_query, type_category_fn, 
+                              direction, output_dir=None, k=30):
+    """
+    Evaluates foundation model batch-integration by measuring the fraction of 
+    reference cells in the local neighborhood of query cells.
+    """
+    joint_emb = np.vstack([emb_ref, emb_query])
+    is_ref = np.array([True] * len(emb_ref) + [False] * len(emb_query))
+    
+    nn = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(joint_emb)
+    # Get neighbors for query cells only
+    distances, indices = nn.kneighbors(emb_query)
+    
+    # Fraction of neighbors that belong to the reference dataset
+    ref_fractions = is_ref[indices].mean(axis=1)
+    
+    df = pd.DataFrame({
+        'cell_type': labels_query,
+        'category': [type_category_fn(t) for t in labels_query],
+        'ref_mixing_fraction': ref_fractions
+    })
+    
+    # Sort for plotting: normal -> intermediate -> blast
+    cat_order = ['normal', 'intermediate', 'blast']
+    df['cat_ord'] = pd.Categorical(df['category'], categories=cat_order, ordered=True)
+    df = df.sort_values(['cat_ord', 'cell_type'])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.boxplot(data=df, x='cell_type', y='ref_mixing_fraction', hue='category', 
+                palette=_TYPE_COLORS, ax=ax, fliersize=1)
+    
+    ax.axhline(0.5, ls='--', c='black', alpha=0.3, label='Perfect Mixing')
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel('Fraction of Reference Neighbors', fontweight='bold')
+    ax.set_title(f'Cross-Dataset Neighborhood Integration (k={k})\n{direction}', fontweight='bold')
+    
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        plt.savefig(output_dir / f"dataset_mixing_{safe}.png", dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_prediction_entropy(ct_prob_matrix, labels_query, type_category_fn, 
+                            direction, output_dir=None):
+    """
+    Calculates Shannon entropy of the discrete classifier's probability distribution.
+    High entropy implies the classifier is forcing a discrete label onto an ambiguous cell.
+    """
+    # Calculate Shannon entropy row-wise
+    entropies = scipy.stats.entropy(ct_prob_matrix.values, axis=1)
+    
+    df = pd.DataFrame({
+        'cell_type': labels_query,
+        'category': [type_category_fn(t) for t in labels_query],
+        'entropy': entropies
+    })
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.violinplot(data=df, x='category', y='entropy', palette=_TYPE_COLORS, 
+                   inner="quartile", ax=ax)
+    
+    ax.set_ylabel('Shannon Entropy (bits)', fontweight='bold')
+    ax.set_xlabel('Biological State', fontweight='bold')
+    ax.set_title(f'CellTypist Prediction Ambiguity (Entropy)\n{direction}', fontweight='bold')
+    
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+    
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        plt.savefig(output_dir / f"prediction_entropy_{safe}.png", dpi=150, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
 
 def load_and_prep(path: Path, label_col: str, harmonised_map: dict,
                   max_cells: int = None, seed: int = 42) -> pd.DataFrame:
@@ -271,7 +428,7 @@ def load_and_prep(path: Path, label_col: str, harmonised_map: dict,
     # Use logcounts layer if .X is not already log-normalised
     if 'logcounts' in adata.layers:
         adata.X = adata.layers['logcounts']
-        adata.uns['log1p'] = True   # signal to downstream that .X is log-normalised
+        adata.uns['log1p'] = {}     # Scanpy expects a dictionary here
 
     # Map labels
     raw_labels = adata.obs[label_col].astype(str)
@@ -1139,13 +1296,14 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
     # ------------------------------------------------------------------
     # SCimilarity
     # ------------------------------------------------------------------
+    emb_ref = None
     if RUN_SCIMILARITY:
         try:
             print("  [SCimilarity] computing embeddings...")
             t0 = time.time()
             emb_ref   = get_scimilarity_embeddings(adata_ref,   MODEL_PATH)
             emb_query = get_scimilarity_embeddings(adata_query, MODEL_PATH)
-            emb_query_out = emb_query   # expose for novel-type analysis
+            emb_query_out = emb_query
             print(f"    Embeddings: ref {emb_ref.shape}, query {emb_query.shape}  "
                   f"({time.time()-t0:.1f}s)")
 
@@ -1180,6 +1338,7 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
     # ------------------------------------------------------------------
     # CellTypist
     # ------------------------------------------------------------------
+    ct_prob_matrix = None
     if RUN_CELLTYPIST:
         try:
             print("  [CellTypist] training...")
@@ -1187,14 +1346,39 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
             ct  = CellTypistModel(majority_voting=True)
             ct.fit(adata_ref, target_column='_harmonised')
             print(f"    Trained in {time.time()-t0:.1f}s")
+            
             t1  = time.time()
+            # Your wrapper returns the categorical array directly
             pred = ct.predict(adata_query)
             print(f"    Predicted in {time.time()-t1:.1f}s")
+            
+            # --- Extract probability matrix for the new metrics ---
+            # Option A: If your sccl wrapper has a predict_proba method
+            if hasattr(ct, 'predict_proba'):
+                raw_probs = ct.predict_proba(adata_query)
+                if isinstance(raw_probs, pd.DataFrame):
+                    ct_prob_matrix = raw_probs
+                else:
+                    classes = ct.classes_ if hasattr(ct, 'classes_') else np.unique(labels_ref[pd.notna(labels_ref)])
+                    ct_prob_matrix = pd.DataFrame(raw_probs, columns=classes)
+                    
+            # Option B: Bypass the wrapper and use the trained raw model
+            elif hasattr(ct, 'model'):
+                import celltypist
+                print("    [CellTypist] Extracting probabilities via raw model...")
+                # Run native celltypist to get the full AnnotationResult
+                res = celltypist.annotate(adata_query, model=ct.model, majority_voting=True)
+                ct_prob_matrix = res.probability_matrix
+                
+            else:
+                print("    [CellTypist] Warning: Could not find probability matrix. Entropy/trajectory plots will be skipped.")
+                
             predictions['CellTypist'] = pred
             row = _metrics_row('CellTypist', pred)
             overall_metrics.append(row)
             print(f"    [CellTypist] Acc {row['accuracy']:.3f}  ARI {row['ari']:.3f}  "
                   f"F1 {row['f1_macro']:.3f}")
+                  
         except Exception as exc:
             print(f"  [CellTypist] ERROR: {exc}")
             import traceback; traceback.print_exc()
@@ -1213,7 +1397,7 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
             print(f"    [SingleR] Acc {row['accuracy']:.3f}  ARI {row['ari']:.3f}  "
                   f"F1 {row['f1_macro']:.3f}  ({time.time()-t0:.1f}s)")
 
-    return predictions, overall_metrics, emb_query_out
+    return predictions, overall_metrics, emb_ref, emb_query_out, ct_prob_matrix
 
 
 # ==============================================================================
@@ -1272,12 +1456,13 @@ def main():
     print("Direction A: Train on Beneyto → Predict Velten")
     print("=" * 60)
 
-    preds_a, metrics_a, emb_a = run_transfer(
+    preds_a, metrics_a, emb_ref_a, emb_query_a, ct_probs_a = run_transfer(
         adata_ref=adata_beneyto,
         adata_query=adata_velten,
         direction='Beneyto → Velten',
         type_category_fn=_velten_type_category,
     )
+
 
     if preds_a:
         fine_v = adata_velten.obs['_raw_label'].values
@@ -1305,6 +1490,40 @@ def main():
             output_dir=FIGURE_DIR,
         )
 
+        if emb_ref_a is not None and emb_query_a is not None:
+            # 1. Dataset mixing
+            plot_cross_dataset_mixing(
+                emb_ref=emb_ref_a, 
+                emb_query=emb_query_a, 
+                labels_query=fine_v, 
+                type_category_fn=_velten_type_category, 
+                direction='Beneyto → Velten',
+                output_dir=FIGURE_DIR
+            )
+            
+            # 2. Trajectory Interpolation 
+            if ct_probs_a is not None:
+                plot_trajectory_interpolation(
+                    emb_ref=emb_ref_a, 
+                    emb_query=emb_query_a, 
+                    labels_ref=adata_beneyto.obs['_harmonised'].values, 
+                    labels_query=fine_v, 
+                    ct_prob_matrix=ct_probs_a, 
+                    type_category_fn=_velten_type_category, 
+                    direction='Beneyto → Velten',
+                    output_dir=FIGURE_DIR
+                )
+                
+        # 3. Prediction Entropy
+        if ct_probs_a is not None:
+            plot_prediction_entropy(
+                ct_prob_matrix=ct_probs_a, 
+                labels_query=fine_v, 
+                type_category_fn=_velten_type_category, 
+                direction='Beneyto → Velten',
+                output_dir=FIGURE_DIR
+            )
+
         # Save per-type accuracy tables
         for method, pred in preds_a.items():
             df = per_type_accuracy(fine_v, pred, harm_v)
@@ -1314,9 +1533,9 @@ def main():
 
     # Novel type separation: do Velten blast/intermediate types cluster
     # distinctly in SCimilarity space even when labelled incorrectly?
-    if emb_a is not None:
+    if emb_ref_a is not None:
         analyze_novel_type_separation(
-            adata_velten, emb_a, NOVEL_TYPES_VELTEN,
+            adata_velten, emb_ref_a, NOVEL_TYPES_VELTEN,
             'Beneyto → Velten', FIGURE_DIR,
         )
 
@@ -1327,7 +1546,7 @@ def main():
     print("Direction B: Train on Velten → Predict Beneyto")
     print("=" * 60)
 
-    preds_b, metrics_b, emb_b = run_transfer(
+    preds_b, metrics_b, emb_ref_b, emb_query_b, ct_probs_b = run_transfer(
         adata_ref=adata_velten,
         adata_query=adata_beneyto,
         direction='Velten → Beneyto',
@@ -1360,6 +1579,40 @@ def main():
             output_dir=FIGURE_DIR,
         )
 
+        if emb_ref_b is not None and emb_query_b is not None:
+            # 1. Dataset mixing
+            plot_cross_dataset_mixing(
+                emb_ref=emb_ref_b, 
+                emb_query=emb_query_b, 
+                labels_query=fine_v, 
+                type_category_fn=_beneyto_type_category, 
+                direction='Velten -> Beneyto',
+                output_dir=FIGURE_DIR
+            )
+            
+            # 2. Trajectory Interpolation 
+            if ct_probs_b is not None:
+                plot_trajectory_interpolation(
+                    emb_ref=emb_ref_b, 
+                    emb_query=emb_query_b, 
+                    labels_ref=adata_velten.obs['_harmonised'].values, 
+                    labels_query=fine_v, 
+                    ct_prob_matrix=ct_probs_b, 
+                    type_category_fn=_beneyto_type_category, 
+                    direction='Velten -> Beneyto',
+                    output_dir=FIGURE_DIR
+                )
+                
+        # 3. Prediction Entropy
+        if ct_probs_b is not None:
+            plot_prediction_entropy(
+                ct_prob_matrix=ct_probs_b, 
+                labels_query=fine_v, 
+                type_category_fn=_beneyto_type_category, 
+                direction='Velten -> Beneyto',
+                output_dir=FIGURE_DIR
+            )
+
         for method, pred in preds_b.items():
             df = per_type_accuracy(fine_b, pred, harm_b)
             df['category'] = df['cell_type'].map(_beneyto_type_category)
@@ -1368,9 +1621,9 @@ def main():
 
     # Novel type separation: do Beneyto intermediate progenitors cluster
     # distinctly in SCimilarity space even when trained only on Velten blasts?
-    if emb_b is not None:
+    if emb_ref_b is not None:
         analyze_novel_type_separation(
-            adata_beneyto, emb_b, NOVEL_TYPES_BENEYTO,
+            adata_beneyto, emb_ref_b, NOVEL_TYPES_BENEYTO,
             'Velten → Beneyto', FIGURE_DIR,
         )
 

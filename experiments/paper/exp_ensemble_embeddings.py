@@ -109,17 +109,18 @@ ZHENG_SCENARIOS = [
 ]
 
 # Combine all scenarios (AML uses 'reference'/'query' study names, Zheng uses file paths)
-SCENARIOS = ZHENG_SCENARIOS + AML_SCENARIOS
+# SCENARIOS = ZHENG_SCENARIOS + AML_SCENARIOS
 
+SCENARIOS = ZHENG_SCENARIOS
 
 # Which methods to run (set to False to skip)
 RUN_CELLTYPIST = True
-RUN_SCIMILARITY = True
-RUN_SINGLER = True
-RUN_SCTAB = True
+RUN_SCIMILARITY = False
+RUN_SINGLER = False
+RUN_SCTAB = False
 
 # Number of runs for statistical analysis (box-whisker plots)
-N_RUNS = 5
+N_RUNS = 1
 
 # Figure output directory
 FIGURE_DIR = OUTPUT_DIR / "figures"
@@ -210,7 +211,6 @@ def train_ensemble(embeddings_ref, labels_ref, ensemble_type='voting'):
 def predict_ensemble(ensemble, embeddings_query, ensemble_type='voting'):
     """Make predictions with ensemble."""
     return ensemble.predict(embeddings_query)
-
 
 # ==============================================================================
 # VISUALIZATION FUNCTIONS
