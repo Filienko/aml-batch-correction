@@ -307,6 +307,14 @@ def plot_trajectory_interpolation(emb_ref, emb_query, labels_ref, labels_query,
     # Filter to intermediate and blast types
     df_focus = df[df['category'].isin(['intermediate', 'blast'])]
     if df_focus.empty: return
+    summary_df = df_focus.groupby('cell_type')[['SCimilarity_Progression', 'CellTypist_Progression']].agg(['mean', 'std'])
+    print(f"\n  [Trajectory Interpolation Summary - {direction}]")
+    print(summary_df.to_string(float_format='{:.3f}'.format))
+    
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        summary_df.to_csv(output_dir / f"trajectory_summary_{safe}.csv")
+        df_focus.to_csv(output_dir / f"trajectory_raw_{safe}.csv", index=False)
 
     # 4. Plotting
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
@@ -359,6 +367,14 @@ def plot_cross_dataset_mixing(emb_ref, emb_query, labels_query, type_category_fn
     cat_order = ['normal', 'intermediate', 'blast']
     df['cat_ord'] = pd.Categorical(df['category'], categories=cat_order, ordered=True)
     df = df.sort_values(['cat_ord', 'cell_type'])
+    summary_df = df.groupby(['category', 'cell_type'])['ref_mixing_fraction'].agg(['mean', 'median', 'std']).dropna()
+    print(f"\n  [Cross-Dataset Mixing Summary (k={k}) - {direction}]")
+    print(summary_df.to_string(float_format='{:.3f}'.format))
+    
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        summary_df.to_csv(output_dir / f"dataset_mixing_summary_{safe}.csv")
+        df.to_csv(output_dir / f"dataset_mixing_raw_{safe}.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.boxplot(data=df, x='cell_type', y='ref_mixing_fraction', hue='category', 
@@ -395,7 +411,15 @@ def plot_prediction_entropy(ct_prob_matrix, labels_query, type_category_fn,
         'category': [type_category_fn(t) for t in labels_query],
         'entropy': entropies
     })
+    summary_df = df.groupby(['category', 'cell_type'])['entropy'].agg(['mean', 'median', 'std']).dropna()
+    print(f"\n  [Prediction Entropy Summary - {direction}]")
+    print(summary_df.to_string(float_format='{:.3f}'.format))
     
+    if output_dir:
+        safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        summary_df.to_csv(output_dir / f"prediction_entropy_summary_{safe}.csv")
+        df.to_csv(output_dir / f"prediction_entropy_raw_{safe}.csv", index=False)
+
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.violinplot(data=df, x='category', y='entropy', palette=_TYPE_COLORS, 
                    inner="quartile", ax=ax)
