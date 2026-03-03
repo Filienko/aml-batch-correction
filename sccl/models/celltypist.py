@@ -146,6 +146,9 @@ class CellTypistModel(BaseModel):
         else:
             predicted_labels = predictions.predicted_labels['predicted_labels'].values
 
+        # Store probability matrix so callers can access it after predict()
+        self.probability_matrix = predictions.probability_matrix
+
         self.is_trained = True
         return predicted_labels
 

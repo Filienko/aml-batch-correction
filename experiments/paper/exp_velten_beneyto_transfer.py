@@ -495,8 +495,8 @@ def get_scimilarity_embeddings(adata, model_path):
 
 def _refine(embeddings, predictions, k=30):
     """kNN majority-vote smoothing on query's own embedding graph."""
-    nn = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(embeddings)
-    neighbours = nn.kneighbors(embeddings, return_distance=False)
+    nn = NearestNeighbors(n_neighbors=k + 1, n_jobs=-1).fit(embeddings)
+    neighbours = nn.kneighbors(embeddings, return_distance=False)[:, 1:]  # drop self
     return np.array([Counter(predictions[idx]).most_common(1)[0][0]
                      for idx in neighbours])
 
@@ -1372,30 +1372,13 @@ def run_transfer(adata_ref, adata_query, direction, type_category_fn):
             print(f"    Trained in {time.time()-t0:.1f}s")
             
             t1  = time.time()
-            # Your wrapper returns the categorical array directly
             pred = ct.predict(adata_query)
             print(f"    Predicted in {time.time()-t1:.1f}s")
-            
-            # --- Extract probability matrix for the new metrics ---
-            # Option A: If your sccl wrapper has a predict_proba method
-            if hasattr(ct, 'predict_proba'):
-                raw_probs = ct.predict_proba(adata_query)
-                if isinstance(raw_probs, pd.DataFrame):
-                    ct_prob_matrix = raw_probs
-                else:
-                    classes = ct.classes_ if hasattr(ct, 'classes_') else np.unique(labels_ref[pd.notna(labels_ref)])
-                    ct_prob_matrix = pd.DataFrame(raw_probs, columns=classes)
-                    
-            # Option B: Bypass the wrapper and use the trained raw model
-            elif hasattr(ct, 'model'):
-                import celltypist
-                print("    [CellTypist] Extracting probabilities via raw model...")
-                # Run native celltypist to get the full AnnotationResult
-                res = celltypist.annotate(adata_query, model=ct.model, majority_voting=True)
-                ct_prob_matrix = res.probability_matrix
-                
-            else:
-                print("    [CellTypist] Warning: Could not find probability matrix. Entropy/trajectory plots will be skipped.")
+
+            # probability_matrix is stored on the wrapper by predict()
+            ct_prob_matrix = getattr(ct, 'probability_matrix', None)
+            if ct_prob_matrix is None:
+                print("    [CellTypist] Warning: no probability_matrix — entropy/trajectory plots skipped.")
                 
             predictions['CellTypist'] = pred
             row = _metrics_row('CellTypist', pred)
@@ -1507,8 +1490,8 @@ def main():
 
         plot_intermediate_confusion(
             preds_a, fine_v,
-            harmonised_categories=sorted(set(VELTEN_CT_TO_HARMONISED.values()) |
-                                         set(BENEYTO_CT_TO_HARMONISED.values()) - {None}),
+            harmonised_categories=sorted((set(VELTEN_CT_TO_HARMONISED.values()) |
+                                          set(BENEYTO_CT_TO_HARMONISED.values())) - {None}),
             intermediate_types=INTERMEDIATE_VELTEN,
             direction='Beneyto → Velten',
             output_dir=FIGURE_DIR,
@@ -1557,9 +1540,9 @@ def main():
 
     # Novel type separation: do Velten blast/intermediate types cluster
     # distinctly in SCimilarity space even when labelled incorrectly?
-    if emb_ref_a is not None:
+    if emb_query_a is not None:
         analyze_novel_type_separation(
-            adata_velten, emb_ref_a, NOVEL_TYPES_VELTEN,
+            adata_velten, emb_query_a, NOVEL_TYPES_VELTEN,
             'Beneyto → Velten', FIGURE_DIR,
         )
 
@@ -1596,8 +1579,8 @@ def main():
 
         plot_intermediate_confusion(
             preds_b, fine_b,
-            harmonised_categories=sorted(set(VELTEN_CT_TO_HARMONISED.values()) |
-                                         set(BENEYTO_CT_TO_HARMONISED.values()) - {None}),
+            harmonised_categories=sorted((set(VELTEN_CT_TO_HARMONISED.values()) |
+                                          set(BENEYTO_CT_TO_HARMONISED.values())) - {None}),
             intermediate_types=INTERMEDIATE_BENEYTO,
             direction='Velten → Beneyto',
             output_dir=FIGURE_DIR,
@@ -1606,34 +1589,34 @@ def main():
         if emb_ref_b is not None and emb_query_b is not None:
             # 1. Dataset mixing
             plot_cross_dataset_mixing(
-                emb_ref=emb_ref_b, 
-                emb_query=emb_query_b, 
-                labels_query=fine_v, 
-                type_category_fn=_beneyto_type_category, 
-                direction='Velten -> Beneyto',
+                emb_ref=emb_ref_b,
+                emb_query=emb_query_b,
+                labels_query=fine_b,
+                type_category_fn=_beneyto_type_category,
+                direction='Velten → Beneyto',
                 output_dir=FIGURE_DIR
             )
-            
-            # 2. Trajectory Interpolation 
+
+            # 2. Trajectory Interpolation
             if ct_probs_b is not None:
                 plot_trajectory_interpolation(
-                    emb_ref=emb_ref_b, 
-                    emb_query=emb_query_b, 
-                    labels_ref=adata_velten.obs['_harmonised'].values, 
-                    labels_query=fine_v, 
-                    ct_prob_matrix=ct_probs_b, 
-                    type_category_fn=_beneyto_type_category, 
-                    direction='Velten -> Beneyto',
+                    emb_ref=emb_ref_b,
+                    emb_query=emb_query_b,
+                    labels_ref=adata_velten.obs['_harmonised'].values,
+                    labels_query=fine_b,
+                    ct_prob_matrix=ct_probs_b,
+                    type_category_fn=_beneyto_type_category,
+                    direction='Velten → Beneyto',
                     output_dir=FIGURE_DIR
                 )
-                
+
         # 3. Prediction Entropy
         if ct_probs_b is not None:
             plot_prediction_entropy(
-                ct_prob_matrix=ct_probs_b, 
-                labels_query=fine_v, 
-                type_category_fn=_beneyto_type_category, 
-                direction='Velten -> Beneyto',
+                ct_prob_matrix=ct_probs_b,
+                labels_query=fine_b,
+                type_category_fn=_beneyto_type_category,
+                direction='Velten → Beneyto',
                 output_dir=FIGURE_DIR
             )
 
@@ -1645,9 +1628,9 @@ def main():
 
     # Novel type separation: do Beneyto intermediate progenitors cluster
     # distinctly in SCimilarity space even when trained only on Velten blasts?
-    if emb_ref_b is not None:
+    if emb_query_b is not None:
         analyze_novel_type_separation(
-            adata_beneyto, emb_ref_b, NOVEL_TYPES_BENEYTO,
+            adata_beneyto, emb_query_b, NOVEL_TYPES_BENEYTO,
             'Velten → Beneyto', FIGURE_DIR,
         )
 
