@@ -336,7 +336,9 @@ def plot_trajectory_interpolation(emb_ref, emb_query, labels_ref, labels_query,
     
     if output_dir:
         safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
-        plt.savefig(output_dir / f"trajectory_interpolation_{safe}.png", dpi=150, bbox_inches='tight')
+        safe_start = start_state.replace('/', '_').replace(' ', '_')
+        safe_end = end_state.replace('/', '_').replace(' ', '_')
+        plt.savefig(output_dir / f"trajectory_interpolation_{safe}_{safe_start}_to_{safe_end}.png", dpi=150, bbox_inches='tight')
         plt.close()
     else:
         plt.show()
@@ -1077,6 +1079,137 @@ def plot_umap_comparison(emb_scim, emb_pca, fine_labels, novel_types: set,
     else:
         plt.show()
 
+def plot_trajectory_umap(emb_ref, emb_query, adata_query,
+                         labels_ref, labels_query,
+                         type_category_fn, direction,
+                         start_state='HSC/Progenitor', end_state='Monocyte',
+                         output_dir=None):
+    """Side-by-side UMAP (SCimilarity vs PCA) showing how intermediate blasts
+    are positioned relative to start_state and end_state anchor points.
+
+    SCimilarity panel uses combined ref+query to give spatial context.
+    PCA panel uses query-only to show gene-expression baseline.
+    """
+    try:
+        import umap as umap_mod
+    except ImportError:
+        print("  umap-learn not installed; skipping trajectory UMAP.")
+        return
+
+    import scipy.sparse
+    from sklearn.decomposition import PCA as _PCA
+
+    labels_query = np.asarray(labels_query)
+    labels_ref   = np.asarray(labels_ref)
+
+    # Identify intermediate/blast types present in query
+    focus_types = sorted(set(
+        t for t in labels_query
+        if pd.notna(t) and type_category_fn(t) in ('intermediate', 'blast')
+    ))
+    if not focus_types:
+        print(f"  No intermediate/blast types found for trajectory UMAP; skipping.")
+        return
+
+    # PCA on query expression (gene-expression baseline)
+    X_raw = adata_query.X
+    if scipy.sparse.issparse(X_raw):
+        X_raw = X_raw.toarray()
+    X_raw   = np.asarray(X_raw, dtype=np.float32)
+    n_comps = min(50, X_raw.shape[1] - 1, X_raw.shape[0] - 1)
+    emb_pca = _PCA(n_components=n_comps, random_state=42).fit_transform(X_raw)
+
+    # SCimilarity: fit UMAP on combined ref+query for spatial context
+    combined = np.vstack([emb_ref, emb_query])
+    n_ref    = len(emb_ref)
+
+    print(f"    Computing trajectory UMAPs ({start_state} → {end_state})...")
+    reducer       = umap_mod.UMAP(n_components=2, random_state=42, n_jobs=1, verbose=False)
+    umap_combined = reducer.fit_transform(combined)
+    umap_scim_ref   = umap_combined[:n_ref]
+    umap_scim_query = umap_combined[n_ref:]
+
+    reducer2 = umap_mod.UMAP(n_components=2, random_state=42, n_jobs=1, verbose=False)
+    umap_pca = reducer2.fit_transform(emb_pca)
+
+    # Color scheme
+    anchor_colors = {start_state: '#2196F3', end_state: '#F44336'}   # blue / red
+    cmap          = plt.cm.get_cmap('tab10', max(len(focus_types), 1))
+    focus_colors  = {t: cmap(i) for i, t in enumerate(focus_types)}
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+    def _draw(ax, coords_q, coords_ref_opt, title):
+        bg_mask = np.array([
+            t not in focus_colors and t not in anchor_colors
+            for t in labels_query
+        ])
+        # Background query cells (grey)
+        ax.scatter(coords_q[bg_mask, 0], coords_q[bg_mask, 1],
+                   c='#D8D8D8', s=4, alpha=0.3, rasterized=True)
+
+        # Reference anchor cells (faint, only in SCimilarity panel)
+        if coords_ref_opt is not None:
+            for state, col in anchor_colors.items():
+                mask = labels_ref == state
+                if mask.any():
+                    ax.scatter(coords_ref_opt[mask, 0], coords_ref_opt[mask, 1],
+                               c=[col], s=5, alpha=0.25, rasterized=True)
+
+        # Anchor query cells
+        for state, col in anchor_colors.items():
+            mask = labels_query == state
+            if mask.any():
+                ax.scatter(coords_q[mask, 0], coords_q[mask, 1],
+                           c=[col], s=18, alpha=0.65,
+                           label=f'{state}', rasterized=True)
+
+        # Focus (intermediate/blast) types
+        for ct in focus_types:
+            mask = labels_query == ct
+            if mask.any():
+                ax.scatter(coords_q[mask, 0], coords_q[mask, 1],
+                           c=[focus_colors[ct]], s=30, alpha=0.9,
+                           edgecolors='white', linewidths=0.3,
+                           label=ct, rasterized=True, zorder=4)
+
+        ax.set_title(title, fontsize=13, fontweight='bold')
+        ax.set_xticks([]); ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    _draw(axes[0], umap_scim_query, umap_scim_ref, 'SCimilarity Latent Space')
+    _draw(axes[1], umap_pca,        None,           'PCA Baseline Space')
+
+    # Deduplicated legend
+    handles, lbls = axes[0].get_legend_handles_labels()
+    seen, deduped = set(), []
+    for h, l in zip(handles, lbls):
+        if l not in seen:
+            seen.add(l); deduped.append((h, l))
+    fig.legend([h for h, l in deduped], [l for h, l in deduped],
+               bbox_to_anchor=(1.02, 0.5), loc='center left',
+               fontsize=10, markerscale=2, frameon=False,
+               title='Cell Types', title_fontsize=11)
+
+    fig.suptitle(
+        f'Intermediate Blast Positioning: {start_state} → {end_state}\n{direction}',
+        fontsize=15, fontweight='bold'
+    )
+    plt.tight_layout()
+
+    if output_dir:
+        safe       = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
+        safe_start = start_state.replace('/', '_').replace(' ', '_')
+        safe_end   = end_state.replace('/', '_').replace(' ', '_')
+        fn = output_dir / f"trajectory_umap_{safe}_{safe_start}_to_{safe_end}.png"
+        plt.savefig(fn, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print(f"    Saved: {fn.name}")
+    else:
+        plt.show()
+
+
 def plot_knn_purity_comparison(purity_scim: dict, purity_pca: dict,
                                 fine_labels, novel_types: set,
                                 direction: str, output_dir=None):
@@ -1537,18 +1670,39 @@ def main():
                 output_dir=FIGURE_DIR
             )
             
-            # 2. Trajectory Interpolation 
-            if ct_probs_a is not None:
-                plot_trajectory_interpolation(
-                    emb_ref=emb_ref_a, 
-                    emb_query=emb_query_a, 
-                    labels_ref=adata_beneyto.obs['_harmonised'].values, 
-                    labels_query=fine_v, 
-                    ct_prob_matrix=ct_probs_a, 
-                    type_category_fn=_velten_type_category, 
+            # 2. Trajectory Interpolation (three biological axes)
+            trajectory_axes = [
+                ('HSC/Progenitor', 'Early Myeloid',           'Canonical Myeloid Arrest'),
+                ('HSC/Progenitor', 'Lymphomyeloid Progenitor', 'True Intermediate Match'),
+                ('HSC/Progenitor', 'T Cell',                  'Lymphoid Negative Control'),
+            ]
+            for start, end, axis_name in trajectory_axes:
+                print(f"    Plotting Trajectory: {start} -> {end} ({axis_name})...")
+                plot_trajectory_umap(
+                    emb_ref=emb_ref_a,
+                    emb_query=emb_query_a,
+                    adata_query=adata_velten,
+                    labels_ref=adata_beneyto.obs['_harmonised'].values,
+                    labels_query=fine_v,
+                    type_category_fn=_velten_type_category,
                     direction='Beneyto → Velten',
-                    output_dir=FIGURE_DIR
+                    start_state=start,
+                    end_state=end,
+                    output_dir=FIGURE_DIR,
                 )
+                if ct_probs_a is not None:
+                    plot_trajectory_interpolation(
+                        emb_ref=emb_ref_a,
+                        emb_query=emb_query_a,
+                        labels_ref=adata_beneyto.obs['_harmonised'].values,
+                        labels_query=fine_v,
+                        ct_prob_matrix=ct_probs_a,
+                        type_category_fn=_velten_type_category,
+                        direction='Beneyto → Velten',
+                        start_state=start,
+                        end_state=end,
+                        output_dir=FIGURE_DIR,
+                    )
                 
         # 3. Prediction Entropy
         if ct_probs_a is not None:
@@ -1626,18 +1780,39 @@ def main():
                 output_dir=FIGURE_DIR
             )
 
-            # 2. Trajectory Interpolation
-            if ct_probs_b is not None:
-                plot_trajectory_interpolation(
+            # 2. Trajectory Interpolation (three biological axes)
+            trajectory_axes = [
+                ('HSC/Progenitor', 'Early Myeloid',           'Canonical Myeloid Arrest'),
+                ('HSC/Progenitor', 'Lymphomyeloid Progenitor', 'True Intermediate Match'),
+                ('HSC/Progenitor', 'T Cell',                  'Lymphoid Negative Control'),
+            ]
+            for start, end, axis_name in trajectory_axes:
+                print(f"    Plotting Trajectory: {start} -> {end} ({axis_name})...")
+                plot_trajectory_umap(
                     emb_ref=emb_ref_b,
                     emb_query=emb_query_b,
+                    adata_query=adata_beneyto,
                     labels_ref=adata_velten.obs['_harmonised'].values,
                     labels_query=fine_b,
-                    ct_prob_matrix=ct_probs_b,
                     type_category_fn=_beneyto_type_category,
                     direction='Velten → Beneyto',
-                    output_dir=FIGURE_DIR
+                    start_state=start,
+                    end_state=end,
+                    output_dir=FIGURE_DIR,
                 )
+                if ct_probs_b is not None:
+                    plot_trajectory_interpolation(
+                        emb_ref=emb_ref_b,
+                        emb_query=emb_query_b,
+                        labels_ref=adata_velten.obs['_harmonised'].values,
+                        labels_query=fine_b,
+                        ct_prob_matrix=ct_probs_b,
+                        type_category_fn=_beneyto_type_category,
+                        direction='Velten → Beneyto',
+                        start_state=start,
+                        end_state=end,
+                        output_dir=FIGURE_DIR,
+                    )
 
         # 3. Prediction Entropy
         if ct_probs_b is not None:
