@@ -1001,59 +1001,81 @@ def compute_centroid_separation(embeddings: np.ndarray, fine_labels,
     return separation
 
 
-def plot_umap_novel_types(emb_2d: np.ndarray, fine_labels, novel_types: set,
-                          direction: str, output_dir=None):
-    """UMAP scatter: novel/absent types in bright colours, all others muted grey.
-
-    Parameters
-    ----------
-    emb_2d : ndarray, shape (n_cells, 2)   pre-computed 2-D UMAP coordinates
-    fine_labels : array-like
-    novel_types : set of str   types to highlight
-    direction : str
-    output_dir : Path, optional
+def plot_umap_comparison(emb_scim, emb_pca, fine_labels, novel_types: set,
+                         direction: str, output_dir=None):
     """
+    Side-by-side UMAP comparison of SCimilarity vs PCA.
+    Normal cells are plotted in grey; intermediate/novel blasts are highlighted in color.
+    """
+    try:
+        import umap as umap_mod
+    except ImportError:
+        print("  umap-learn not installed; skipping UMAP comparison plot.")
+        return
+
     fine_labels   = np.asarray(fine_labels)
     present_novel = sorted(t for t in novel_types if t in fine_labels)
+    
+    if not present_novel:
+        return
 
+    print("  Computing UMAPs for comparison (this may take a minute)...")
+    # Compute 2D UMAPs for both spaces
+    reducer = umap_mod.UMAP(n_components=2, random_state=42, n_jobs=1, verbose=False)
+    umap_scim = reducer.fit_transform(emb_scim)
+    umap_pca  = reducer.fit_transform(emb_pca)
+
+    # Setup colors
     cmap_bright  = plt.cm.get_cmap('tab10', max(len(present_novel), 1))
     novel_colors = {t: cmap_bright(i) for i, t in enumerate(present_novel)}
 
-    fig, ax = plt.subplots(figsize=(9, 7))
-
-    # Background: non-novel cells in light grey
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7), sharex=False, sharey=False)
     bg_mask = ~np.isin(fine_labels, present_novel)
-    ax.scatter(emb_2d[bg_mask, 0], emb_2d[bg_mask, 1],
-               c='#BDBDBD', s=3, alpha=0.25, rasterized=True, label='Other types')
 
-    # Foreground: novel types in bright, distinct colours
-    for ct in present_novel:
-        mask = fine_labels == ct
-        ax.scatter(emb_2d[mask, 0], emb_2d[mask, 1],
-                   c=[novel_colors[ct]], s=18, alpha=0.80,
-                   label=ct, rasterized=True, zorder=3)
+    # Plotting helper function
+    def _draw_umap(ax, coords, title):
+        # 1. Background: Draw normal cells first (bottom layer)
+        ax.scatter(coords[bg_mask, 0], coords[bg_mask, 1],
+                   c='#E0E0E0', s=5, alpha=0.3, rasterized=True, label='Normal / Reference Types')
+        
+        # 2. Foreground: Draw intermediate/blast cells (top layer)
+        for ct in present_novel:
+            mask = fine_labels == ct
+            ax.scatter(coords[mask, 0], coords[mask, 1],
+                       c=[novel_colors[ct]], s=25, alpha=0.85,
+                       edgecolors='white', linewidths=0.2,
+                       label=ct, rasterized=True, zorder=3)
+            
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
 
-    ax.set_xlabel('UMAP 1', fontsize=11)
-    ax.set_ylabel('UMAP 2', fontsize=11)
-    ax.set_title(f'SCimilarity Embedding — Novel / Absent Types\n{direction}',
-                 fontsize=12, fontweight='bold')
-    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8,
-              markerscale=3, frameon=True,
-              title='Novel types (bright)\nOther types (grey)',
-              title_fontsize=8)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    # Draw both UMAPs
+    _draw_umap(axes[0], umap_scim, 'SCimilarity Latent Space')
+    _draw_umap(axes[1], umap_pca, 'PCA Baseline Space')
+
+    # Add a single shared legend outside the plots
+    handles, labels = axes[1].get_legend_handles_labels()
+    fig.legend(handles, labels, bbox_to_anchor=(1.02, 0.5), loc='center left', 
+               fontsize=11, markerscale=2, frameon=False, 
+               title='Cell Types', title_fontsize=12)
+
+    fig.suptitle(f'Structural Encapsulation of Intermediate Blasts\n{direction}', 
+                 fontsize=16, fontweight='bold', y=1.05)
     plt.tight_layout()
 
     if output_dir:
         safe = direction.replace(' ', '_').replace('→', 'to').replace('/', '_')
-        fn   = output_dir / f"umap_novel_{safe}.png"
-        plt.savefig(fn, dpi=150, bbox_inches='tight', facecolor='white')
+        fn   = output_dir / f"umap_comparison_{safe}.png"
+        plt.savefig(fn, dpi=200, bbox_inches='tight', facecolor='white')
         plt.close()
         print(f"    Saved: {fn.name}")
     else:
         plt.show()
-
 
 def plot_knn_purity_comparison(purity_scim: dict, purity_pca: dict,
                                 fine_labels, novel_types: set,
@@ -1270,8 +1292,15 @@ def analyze_novel_type_separation(adata_query, emb_scimilarity: np.ndarray,
         reducer = umap_mod.UMAP(n_components=2, random_state=42,
                                 n_jobs=1, verbose=False)
         emb_2d  = reducer.fit_transform(emb_scimilarity)
-        plot_umap_novel_types(emb_2d, fine_labels, set(present_novel),
-                              direction, output_dir)
+        plot_umap_comparison(
+        emb_scim=emb_scimilarity, 
+        emb_pca=emb_pca, 
+        fine_labels=fine_labels, 
+        novel_types=set(present_novel), 
+        direction=direction, 
+        output_dir=output_dir
+        )
+
     except ImportError:
         print("  umap-learn not installed; skipping UMAP plot.")
 
