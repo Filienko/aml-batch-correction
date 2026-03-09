@@ -127,16 +127,6 @@ BENEYTO_PATH = Path("/home/daniilf/aml-batch-correction/data/beneyto.h5ad")
 VELTEN_PATH  = Path("/home/daniilf/aml-batch-correction/data/velten.h5ad")
 MODEL_PATH   = "/home/daniilf/aml-batch-correction/model_v1.1"
 
-# Projected labels for Velten — output of scripts/project_to_triana_reference.R
-#
-#   Rscript scripts/project_to_triana_reference.R \
-#       --input  data/velten.h5ad \
-#       --output data/velten_triana_projected.csv
-#
-# The CSV must have columns: barcode, projected_celltype
-TRIANA_PROJECTION_CSV_VELTEN = Path(
-    "/home/daniilf/aml-batch-correction/data/velten_triana_projected.csv"
-)
 
 OUTPUT_DIR  = Path(__file__).parent / "results"
 FIGURE_DIR  = OUTPUT_DIR / "figures"
@@ -161,16 +151,11 @@ RUN_SINGLER     = True   # requires the `singler` Python package
 
 BENEYTO_EXCLUDE = {'Mesenchymal cells_1'}
 
-# Velten uses a different (older) annotation vocabulary.  To put both datasets
-# in the same label space, project Velten onto the Triana reference:
-#
-#   Rscript scripts/project_to_triana_reference.R \
-#       --input  data/velten.h5ad \
-#       --output data/velten_triana_projected.csv
-#
-# The CSV output (columns: barcode, projected_celltype) is loaded in
-# load_and_prep() and stored as obs['_harmonised'].  Without this file only
-# the Beneyto-only analyses will run.
+# Velten uses a different (older) annotation vocabulary.  It has already been
+# projected onto the Triana reference; the result is stored in
+# obs['projected_celltype'].  load_and_prep() reads that column directly and
+# stores it as obs['_harmonised'].  Use scripts/project_to_triana_reference.R
+# to reproduce the projection for any new dataset.
 
 # Velten types classified as "intermediate" for highlighted visualisation
 INTERMEDIATE_VELTEN = {
@@ -405,7 +390,7 @@ def plot_prediction_entropy(ct_prob_matrix, labels_query, type_category_fn,
 
 def load_and_prep(path: Path, label_col: str,
                   exclude: set = None,
-                  projected_labels_csv: Path = None,
+                  harmonised_col: str = None,
                   max_cells: int = None, seed: int = 42):
     """Load h5ad, assign harmonised labels, optionally subsample.
 
@@ -414,10 +399,9 @@ def load_and_prep(path: Path, label_col: str,
     leave every other label unchanged.
 
     For datasets with a different annotation vocabulary (e.g. Velten), pass
-    ``projected_labels_csv`` pointing to the CSV produced by
-    ``scripts/project_to_triana_reference.R``.  The CSV must have columns
-    ``barcode`` and ``projected_celltype``.  Cells whose barcode is absent
-    from the CSV are dropped.
+    ``harmonised_col`` naming an obs column that already holds Triana-projected
+    labels (e.g. ``"projected_celltype"``).  Cells with NaN in that column
+    are dropped.
 
     In both cases the result is stored in obs['_harmonised'] and the
     original label is preserved in obs['_raw_label'].
@@ -432,27 +416,20 @@ def load_and_prep(path: Path, label_col: str,
     raw_labels = adata.obs[label_col].astype(str)
     adata.obs['_raw_label'] = raw_labels
 
-    if projected_labels_csv is not None:
-        # --- Velten-style: labels come from Triana projection CSV ---
-        if not projected_labels_csv.exists():
-            raise FileNotFoundError(
-                f"Projected labels CSV not found: {projected_labels_csv}\n"
-                "Run scripts/project_to_triana_reference.R first:\n"
-                "  Rscript scripts/project_to_triana_reference.R \\\n"
-                f"      --input  {path} \\\n"
-                f"      --output {projected_labels_csv}"
+    if harmonised_col is not None:
+        # --- Velten-style: projected labels already in obs ---
+        if harmonised_col not in adata.obs.columns:
+            raise KeyError(
+                f"Column '{harmonised_col}' not found in {path.name}.\n"
+                f"Available obs columns: {list(adata.obs.columns)}"
             )
-        proj = pd.read_csv(projected_labels_csv, index_col='barcode')
-        harmonised = raw_labels.index.map(
-            lambda b: proj.loc[b, 'projected_celltype']
-                      if b in proj.index else None
-        )
-        harmonised = pd.Series(harmonised, index=adata.obs_names, dtype=object)
+        harmonised = adata.obs[harmonised_col].astype(object)
+        harmonised[harmonised.isna()] = None
         adata.obs['_harmonised'] = harmonised
         keep = harmonised.notna()
         adata = adata[keep].copy()
         print(f"  {path.name}: {adata.n_obs:,} cells with projected labels "
-              f"({keep.sum():,} / {len(keep):,})")
+              f"from obs['{harmonised_col}']")
     else:
         # --- Beneyto-style: native labels are already Triana vocabulary ---
         exclude = exclude or set()
@@ -461,8 +438,7 @@ def load_and_prep(path: Path, label_col: str,
         keep = harmonised.notna()
         adata = adata[keep].copy()
         if exclude:
-            print(f"  {path.name}: {adata.n_obs:,} cells after dropping excluded types "
-                  f"({keep.sum():,} / {len(keep):,})")
+            print(f"  {path.name}: {adata.n_obs:,} cells after dropping excluded types")
         else:
             print(f"  {path.name}: {adata.n_obs:,} cells loaded")
 
@@ -1587,12 +1563,8 @@ def main():
     have_velten = VELTEN_PATH.exists()
     if not have_velten:
         print(f"\nNOTE: Velten data not found ({VELTEN_PATH}).")
-        print("Only Beneyto-only analyses will run.")
-        print("To enable cross-dataset transfer:")
-        print("  1. Upload data/velten.h5ad")
-        print("  2. Run: Rscript scripts/project_to_triana_reference.R \\")
-        print(f"              --input  {VELTEN_PATH} \\")
-        print(f"              --output {TRIANA_PROJECTION_CSV_VELTEN}")
+        print("Only Beneyto analyses will run.")
+        print("Upload velten.h5ad (with obs['projected_celltype']) to enable cross-dataset transfer.")
 
     # -------------------------------------------------------------------------
     # Load
@@ -1608,7 +1580,7 @@ def main():
         print("\nLoading Velten...")
         adata_velten = load_and_prep(
             VELTEN_PATH, label_col='cell_type',
-            projected_labels_csv=TRIANA_PROJECTION_CSV_VELTEN,
+            harmonised_col='projected_celltype',
             max_cells=MAX_QUERY_CELLS,
         )
 
