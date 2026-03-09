@@ -157,49 +157,7 @@ BENEYTO_EXCLUDE = {'Mesenchymal cells_1'}
 # stores it as obs['_harmonised'].  Use scripts/project_to_triana_reference.R
 # to reproduce the projection for any new dataset.
 
-# Velten types classified as "intermediate" for highlighted visualisation
-INTERMEDIATE_VELTEN = {
-    'CD34+ Blasts and HSPCs',      # explicitly intermediate
-    'CD34- Blasts (Intermediate)', # explicitly intermediate
-    'Mitotic HSPCs (G2/M)',        # cell-cycle state confounds signature
-}
-# Velten blast types (arrested progenitors — not intermediate but still hard)
-BLAST_VELTEN = {
-    'CD34+ Blasts',
-    'CD34+HBZ+ Blasts',
-    'CD34- Blasts (Calprotectin+AZU1-)',
-    'CD34- Blasts (Calprotectin+AZU1+)',
-    'CD34- Blasts (Calprotectin-AZU1+)',
-    'CD34- Blasts (Unclear)',
-}
-
-# Intermediate types in Beneyto (for velten→beneyto direction)
-INTERMEDIATE_BENEYTO = {
-    'Lymphomyeloid prog',
-    'Erythro-myeloid progenitors',
-    'Eosinophil-basophil-mast cell progenitors',
-}
-
-# Novel types: present in the query but absent (as fine-grained labels) from
-# the reference dataset.  Even if the classifier assigns an incorrect
-# harmonised label, tight distinct clusters in the embedding indicate the
-# foundation model has captured the biology without supervision.
-NOVEL_TYPES_VELTEN  = INTERMEDIATE_VELTEN | BLAST_VELTEN
-NOVEL_TYPES_BENEYTO = INTERMEDIATE_BENEYTO
-
-
-def _velten_type_category(t):
-    """Return display category for a velten cell_type."""
-    if t in INTERMEDIATE_VELTEN:
-        return 'intermediate'
-    if t in BLAST_VELTEN:
-        return 'blast'
-    return 'normal'
-
-
-def _beneyto_type_category(t):
-    if t in INTERMEDIATE_BENEYTO:
-        return 'intermediate'
+def _type_category(t):
     return 'normal'
 
 
@@ -1604,6 +1562,17 @@ def main():
         print("\nSkipping cross-dataset transfer (Velten data not available).")
         return
 
+    # Subset both datasets to shared _harmonised cell types
+    shared_types = (
+        set(adata_beneyto.obs['_harmonised'].dropna().unique()) &
+        set(adata_velten.obs['_harmonised'].dropna().unique())
+    )
+    print(f"\nShared cell types ({len(shared_types)}): {sorted(shared_types)}")
+    adata_beneyto = adata_beneyto[adata_beneyto.obs['_harmonised'].isin(shared_types)].copy()
+    adata_velten  = adata_velten[adata_velten.obs['_harmonised'].isin(shared_types)].copy()
+    print(f"  After subsetting: Beneyto {adata_beneyto.n_obs:,} cells, "
+          f"Velten {adata_velten.n_obs:,} cells")
+
     # -------------------------------------------------------------------------
     # Direction A: Beneyto → Velten
     # -------------------------------------------------------------------------
@@ -1615,7 +1584,7 @@ def main():
         adata_ref=adata_beneyto,
         adata_query=adata_velten,
         direction='Beneyto → Velten',
-        type_category_fn=_velten_type_category,
+        type_category_fn=_type_category,
     )
 
 
@@ -1626,27 +1595,17 @@ def main():
         print("\n  Generating figures for Beneyto → Velten...")
         plot_per_celltype_accuracy(
             preds_a, fine_v, harm_v,
-            _velten_type_category, 'Beneyto → Velten', FIGURE_DIR)
+            _type_category, 'Beneyto → Velten', FIGURE_DIR)
 
         plot_continuous_advantage(
             preds_a, fine_v, harm_v,
-            _velten_type_category, 'Beneyto → Velten',
+            _type_category, 'Beneyto → Velten',
             ref_method='CellTypist', cmp_method='SCimilarity-mlp',
             output_dir=FIGURE_DIR)
 
         plot_overall_metrics(metrics_a, 'Beneyto → Velten', FIGURE_DIR)
 
-        all_harmonised_cats = sorted(
-            set(adata_beneyto.obs['_harmonised'].dropna().unique()) |
-            set(adata_velten.obs['_harmonised'].dropna().unique())
-        )
-        plot_intermediate_confusion(
-            preds_a, fine_v,
-            harmonised_categories=all_harmonised_cats,
-            intermediate_types=INTERMEDIATE_VELTEN,
-            direction='Beneyto → Velten',
-            output_dir=FIGURE_DIR,
-        )
+        all_harmonised_cats = sorted(shared_types)
 
         if emb_ref_a is not None and emb_query_a is not None:
             # 1. Dataset mixing
@@ -1654,7 +1613,7 @@ def main():
                 emb_ref=emb_ref_a,
                 emb_query=emb_query_a,
                 labels_query=fine_v,
-                type_category_fn=_velten_type_category,
+                type_category_fn=_type_category,
                 direction='Beneyto → Velten',
                 output_dir=FIGURE_DIR
             )
@@ -1674,7 +1633,7 @@ def main():
                     adata_query=adata_velten,
                     labels_ref=adata_beneyto.obs['_harmonised'].values,
                     labels_query=fine_v,
-                    type_category_fn=_velten_type_category,
+                    type_category_fn=_type_category,
                     direction='Beneyto → Velten',
                     start_state=start,
                     end_state=end,
@@ -1687,7 +1646,7 @@ def main():
                         labels_ref=adata_beneyto.obs['_harmonised'].values,
                         labels_query=fine_v,
                         ct_prob_matrix=ct_probs_a,
-                        type_category_fn=_velten_type_category,
+                        type_category_fn=_type_category,
                         direction='Beneyto → Velten',
                         start_state=start,
                         end_state=end,
@@ -1697,9 +1656,9 @@ def main():
         # 3. Prediction Entropy
         if ct_probs_a is not None:
             plot_prediction_entropy(
-                ct_prob_matrix=ct_probs_a, 
-                labels_query=fine_v, 
-                type_category_fn=_velten_type_category, 
+                ct_prob_matrix=ct_probs_a,
+                labels_query=fine_v,
+                type_category_fn=_type_category,
                 direction='Beneyto → Velten',
                 output_dir=FIGURE_DIR
             )
@@ -1707,17 +1666,8 @@ def main():
         # Save per-type accuracy tables
         for method, pred in preds_a.items():
             df = per_type_accuracy(fine_v, pred, harm_v)
-            df['category'] = df['cell_type'].map(_velten_type_category)
             df.to_csv(OUTPUT_DIR / f"per_celltype_accuracy_B2V_{method}.csv",
                       index=False)
-
-    # Novel type separation: do Velten blast/intermediate types cluster
-    # distinctly in SCimilarity space even when labelled incorrectly?
-    if emb_query_a is not None:
-        analyze_novel_type_separation(
-            adata_velten, emb_query_a, NOVEL_TYPES_VELTEN,
-            'Beneyto → Velten', FIGURE_DIR,
-        )
 
     # -------------------------------------------------------------------------
     # Direction B: Velten → Beneyto  (supplementary)
@@ -1730,7 +1680,7 @@ def main():
         adata_ref=adata_velten,
         adata_query=adata_beneyto,
         direction='Velten → Beneyto',
-        type_category_fn=_beneyto_type_category,
+        type_category_fn=_type_category,
     )
 
     if preds_b:
@@ -1740,23 +1690,15 @@ def main():
         print("\n  Generating figures for Velten → Beneyto...")
         plot_per_celltype_accuracy(
             preds_b, fine_b, harm_b,
-            _beneyto_type_category, 'Velten → Beneyto', FIGURE_DIR)
+            _type_category, 'Velten → Beneyto', FIGURE_DIR)
 
         plot_continuous_advantage(
             preds_b, fine_b, harm_b,
-            _beneyto_type_category, 'Velten → Beneyto',
+            _type_category, 'Velten → Beneyto',
             ref_method='CellTypist', cmp_method='SCimilarity-mlp',
             output_dir=FIGURE_DIR)
 
         plot_overall_metrics(metrics_b, 'Velten → Beneyto', FIGURE_DIR)
-
-        plot_intermediate_confusion(
-            preds_b, fine_b,
-            harmonised_categories=all_harmonised_cats,
-            intermediate_types=INTERMEDIATE_BENEYTO,
-            direction='Velten → Beneyto',
-            output_dir=FIGURE_DIR,
-        )
 
         if emb_ref_b is not None and emb_query_b is not None:
             # 1. Dataset mixing
@@ -1764,7 +1706,7 @@ def main():
                 emb_ref=emb_ref_b,
                 emb_query=emb_query_b,
                 labels_query=fine_b,
-                type_category_fn=_beneyto_type_category,
+                type_category_fn=_type_category,
                 direction='Velten → Beneyto',
                 output_dir=FIGURE_DIR
             )
@@ -1784,7 +1726,7 @@ def main():
                     adata_query=adata_beneyto,
                     labels_ref=adata_velten.obs['_harmonised'].values,
                     labels_query=fine_b,
-                    type_category_fn=_beneyto_type_category,
+                    type_category_fn=_type_category,
                     direction='Velten → Beneyto',
                     start_state=start,
                     end_state=end,
@@ -1797,7 +1739,7 @@ def main():
                         labels_ref=adata_velten.obs['_harmonised'].values,
                         labels_query=fine_b,
                         ct_prob_matrix=ct_probs_b,
-                        type_category_fn=_beneyto_type_category,
+                        type_category_fn=_type_category,
                         direction='Velten → Beneyto',
                         start_state=start,
                         end_state=end,
@@ -1809,24 +1751,15 @@ def main():
             plot_prediction_entropy(
                 ct_prob_matrix=ct_probs_b,
                 labels_query=fine_b,
-                type_category_fn=_beneyto_type_category,
+                type_category_fn=_type_category,
                 direction='Velten → Beneyto',
                 output_dir=FIGURE_DIR
             )
 
         for method, pred in preds_b.items():
             df = per_type_accuracy(fine_b, pred, harm_b)
-            df['category'] = df['cell_type'].map(_beneyto_type_category)
             df.to_csv(OUTPUT_DIR / f"per_celltype_accuracy_V2B_{method}.csv",
                       index=False)
-
-    # Novel type separation: do Beneyto intermediate progenitors cluster
-    # distinctly in SCimilarity space even when trained only on Velten blasts?
-    if emb_query_b is not None:
-        analyze_novel_type_separation(
-            adata_beneyto, emb_query_b, NOVEL_TYPES_BENEYTO,
-            'Velten → Beneyto', FIGURE_DIR,
-        )
 
     # -------------------------------------------------------------------------
     # Summary printout
