@@ -17,12 +17,36 @@ clusters in the embedding, and the nearest-neighbour classifier will assign
 it to the biologically closest label rather than snapping it to a distant
 discrete signature.
 
+Notebook story: eliminating the Triana projection step
+------------------------------------------------------
+The conventional workflow for standardising hematopoietic cell-type labels
+across studies is to project all cells onto the Triana et al. (2021) healthy
+bone-marrow reference (https://doi.org/10.6084/m9.figshare.13397651) using
+the scmap nearest-neighbour procedure
+(scripts/project_to_triana_reference.R).  This R pipeline is complex,
+requires Bioconductor dependencies, and must be re-run every time a new
+dataset is added.
+
+The key insight of this experiment is that **training SCimilarity on
+Beneyto alone is sufficient to replace the Triana projection entirely**.
+Beneyto was itself annotated with the Triana method, so its native `ct`
+labels already live in the Triana vocabulary — no manual mapping dictionary
+is required for it.  For Velten, the standard approach produces projected
+labels (in the same Triana vocabulary) via the R script above; we use those
+projected labels as ground-truth to evaluate our SCimilarity predictions.
+
+In a production setting a user would simply:
+  1. Train SCimilarity on Beneyto (the Triana-aligned reference).
+  2. Apply the trained model to any new dataset — no R, no scmap, no
+     re-projection.
+
 Datasets
 --------
-Beneyto  (101 767 cells, 39 146 genes): large AML cohort with rich
-         hematopoietic labels spanning normal progenitors → mature cells.
-Velten   (  5 228 cells, 27 059 genes): AML dataset dominated by blast
-         subtypes explicitly labelled as intermediate or unclear.
+Beneyto  (101 767 cells, 39 146 genes): large AML cohort annotated with the
+         Triana healthy-reference projection; labels used directly.
+Velten   (  5 228 cells, 27 059 genes): AML dataset with older annotations;
+         projected to Triana reference via scripts/project_to_triana_reference.R
+         to obtain a ground-truth label in Beneyto/Triana vocabulary.
 
 The blast subtypes in Velten are the key test cases:
   - "CD34+ Blasts and HSPCs"       explicitly intermediate between HSC & blast
@@ -103,6 +127,17 @@ BENEYTO_PATH = Path("/home/daniilf/aml-batch-correction/data/beneyto.h5ad")
 VELTEN_PATH  = Path("/home/daniilf/aml-batch-correction/data/velten.h5ad")
 MODEL_PATH   = "/home/daniilf/aml-batch-correction/model_v1.1"
 
+# Projected labels for Velten — output of scripts/project_to_triana_reference.R
+#
+#   Rscript scripts/project_to_triana_reference.R \
+#       --input  data/velten.h5ad \
+#       --output data/velten_triana_projected.csv
+#
+# The CSV must have columns: barcode, projected_celltype
+TRIANA_PROJECTION_CSV_VELTEN = Path(
+    "/home/daniilf/aml-batch-correction/data/velten_triana_projected.csv"
+)
+
 OUTPUT_DIR  = Path(__file__).parent / "results"
 FIGURE_DIR  = OUTPUT_DIR / "figures"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -117,99 +152,25 @@ RUN_CELLTYPIST  = True
 RUN_SINGLER     = True   # requires the `singler` Python package
 
 # ==============================================================================
-# HARMONISED LABEL SPACE
+# LABEL STRATEGY
 # ==============================================================================
-# Both datasets are mapped to an 11-category shared space that preserves
-# biologically meaningful intermediate states.  The mapping is intentionally
-# fine enough to distinguish key intermediate types while being coarse enough
-# that both datasets have cells in most categories.
+# Beneyto was annotated using the Triana et al. (2021) healthy bone-marrow
+# reference projection.  Its native `ct` labels are therefore already in the
+# Triana vocabulary — no manual mapping is required.  We exclude only the
+# non-haematopoietic contaminant type.
 
-# Categories present only in Beneyto training data (models must generalise):
-#   "Lymphomyeloid Progenitor", "Erythro-myeloid Progenitor",
-#   "Monocyte", "Dendritic Cell"
-# These are the categories where SCimilarity's continuous space should shine —
-# Velten blast cells that resemble these states must be interpolated correctly.
+BENEYTO_EXCLUDE = {'Mesenchymal cells_1'}
 
-BENEYTO_CT_TO_HARMONISED = {
-    # Immature / early progenitors
-    'HSCs & MPPs':                          'HSC/Progenitor',
-    'NK cell progenitors':                  'HSC/Progenitor',
-    # Intermediate bipotent progenitors — KEY types for this story
-    'Lymphomyeloid prog':                   'Lymphomyeloid Progenitor',
-    'Erythro-myeloid progenitors':          'Erythro-myeloid Progenitor',
-    'Eosinophil-basophil-mast cell progenitors': 'Erythro-myeloid Progenitor',
-    # Myeloid differentiation axis
-    'Early promyelocytes':                  'Early Myeloid',
-    'Late promyelocytes':                   'Late Myeloid',
-    'Myelocytes':                           'Late Myeloid',
-    'Classical Monocytes':                  'Monocyte',
-    'Non-classical monocytes':              'Monocyte',
-    'Monocyte-like blasts':                 'Monocyte',
-    # Dendritic cells
-    'Conventional dendritic cell 1':        'Dendritic Cell',
-    'Conventional dendritic cell 2':        'Dendritic Cell',
-    'Plasmacytoid dendritic cells':         'Dendritic Cell',
-    'Plasmacytoid dendritic cell progenitors': 'Dendritic Cell',
-    # Lymphoid
-    'CD56dimCD16+ NK cells':               'NK Cell',
-    'CD56brightCD16- NK cells':            'NK Cell',
-    'NK T cells':                          'NK Cell',
-    'CD4+ memory T cells':                 'T Cell',
-    'CD4+ naive T cells':                  'T Cell',
-    'CD8+ effector memory T cells':        'T Cell',
-    'CD8+ central memory T cells':         'T Cell',
-    'CD8+CD103+ tissue resident memory T cells': 'T Cell',
-    'CD8+ naive T cells':                  'T Cell',
-    'CD4+ cytotoxic T cells':              'T Cell',
-    'GammaDelta T cells':                  'T Cell',
-    'CD69+PD-1+ memory CD4+ T cells':     'T Cell',
-    # B cell axis
-    'Mature naive B cells':                'B Cell',
-    'Nonswitched memory B cells':          'B Cell',
-    'Class switched memory B cells':       'B Cell',
-    'CD11c+ memory B cells':              'B Cell',
-    'Plasma cells':                        'B Cell',
-    'Pro-B cells':                         'B Progenitor',
-    'Pre-B cells':                         'B Progenitor',
-    'Immature B cells':                    'B Progenitor',
-    'Pre-pro-B cells':                     'B Progenitor',
-    'Small pre-B cell':                    'B Progenitor',
-    # Erythroid / megakaryocyte axis
-    'Early erythroid progenitor':          'Erythroid/MEP',
-    'Late erythroid progenitor':           'Erythroid/MEP',
-    'Aberrant erythroid':                  'Erythroid/MEP',
-    'Megakaryocyte progenitors':           'Erythroid/MEP',
-    # Exclude
-    'Mesenchymal cells_1':                 None,
-}
-
-VELTEN_CT_TO_HARMONISED = {
-    # Normal / committed types
-    'HSC/MPPs':                            'HSC/Progenitor',
-    'Mitotic HSPCs (G2/M)':               'HSC/Progenitor',     # cycling ← ambiguous
-    'Neutrophil precursors':               'Late Myeloid',
-    'MEP':                                 'Erythroid/MEP',
-    'Erythroid precursors':               'Erythroid/MEP',
-    'B cells and progenitors':            'B Progenitor',
-    'NK cells':                           'NK Cell',
-    'NK and T cells':                     'NK Cell',
-    'Central memory T-cells':             'T Cell',
-    'Effector memory T-cells':            'T Cell',
-    'Cytotoxic T-cells':                  'T Cell',
-    'Other T/NK cells':                   'T Cell',
-    # Blast / intermediate types — the core test cases
-    # CD34+ blasts: arrested at HSC/progenitor stage
-    'CD34+ Blasts':                       'HSC/Progenitor',
-    'CD34+HBZ+ Blasts':                   'HSC/Progenitor',
-    # Transitional between HSC and committed progenitor — KEY INTERMEDIATE
-    'CD34+ Blasts and HSPCs':             'Lymphomyeloid Progenitor',
-    # CD34- blasts: variably differentiated along myeloid axis
-    'CD34- Blasts (Calprotectin+AZU1-)':  'Early Myeloid',
-    'CD34- Blasts (Intermediate)':         'Early Myeloid',      # KEY INTERMEDIATE
-    'CD34- Blasts (Calprotectin+AZU1+)':  'Late Myeloid',
-    'CD34- Blasts (Calprotectin-AZU1+)':  'Late Myeloid',
-    'CD34- Blasts (Unclear)':             'Late Myeloid',
-}
+# Velten uses a different (older) annotation vocabulary.  To put both datasets
+# in the same label space, project Velten onto the Triana reference:
+#
+#   Rscript scripts/project_to_triana_reference.R \
+#       --input  data/velten.h5ad \
+#       --output data/velten_triana_projected.csv
+#
+# The CSV output (columns: barcode, projected_celltype) is loaded in
+# load_and_prep() and stored as obs['_harmonised'].  Without this file only
+# the Beneyto-only analyses will run.
 
 # Velten types classified as "intermediate" for highlighted visualisation
 INTERMEDIATE_VELTEN = {
@@ -442,31 +403,68 @@ def plot_prediction_entropy(ct_prob_matrix, labels_query, type_category_fn,
         plt.show()
 
 
-def load_and_prep(path: Path, label_col: str, harmonised_map: dict,
-                  max_cells: int = None, seed: int = 42) -> pd.DataFrame:
-    """Load h5ad, apply harmonised label map, optionally subsample.
+def load_and_prep(path: Path, label_col: str,
+                  exclude: set = None,
+                  projected_labels_csv: Path = None,
+                  max_cells: int = None, seed: int = 42):
+    """Load h5ad, assign harmonised labels, optionally subsample.
 
-    Returns the AnnData object and a Series of harmonised labels aligned to
-    adata.obs_names.
+    For datasets whose native labels already use the Triana vocabulary
+    (e.g. Beneyto), pass ``exclude`` to drop contaminant cell types and
+    leave every other label unchanged.
+
+    For datasets with a different annotation vocabulary (e.g. Velten), pass
+    ``projected_labels_csv`` pointing to the CSV produced by
+    ``scripts/project_to_triana_reference.R``.  The CSV must have columns
+    ``barcode`` and ``projected_celltype``.  Cells whose barcode is absent
+    from the CSV are dropped.
+
+    In both cases the result is stored in obs['_harmonised'] and the
+    original label is preserved in obs['_raw_label'].
     """
     adata = sc.read_h5ad(path)
 
     # Use logcounts layer if .X is not already log-normalised
     if 'logcounts' in adata.layers:
         adata.X = adata.layers['logcounts']
-        adata.uns['log1p'] = {}     # Scanpy expects a dictionary here
+        adata.uns['log1p'] = {}
 
-    # Map labels
     raw_labels = adata.obs[label_col].astype(str)
-    harmonised = raw_labels.map(harmonised_map)  # NaN for unmapped
-    adata.obs['_harmonised'] = harmonised
-    adata.obs['_raw_label']  = raw_labels
+    adata.obs['_raw_label'] = raw_labels
 
-    # Drop cells with no harmonised label (e.g. "Mesenchymal cells_1")
-    keep = harmonised.notna()
-    adata = adata[keep].copy()
-    print(f"  {path.name}: {adata.n_obs:,} cells after removing unmapped types "
-          f"({keep.sum():,} / {len(keep):,})")
+    if projected_labels_csv is not None:
+        # --- Velten-style: labels come from Triana projection CSV ---
+        if not projected_labels_csv.exists():
+            raise FileNotFoundError(
+                f"Projected labels CSV not found: {projected_labels_csv}\n"
+                "Run scripts/project_to_triana_reference.R first:\n"
+                "  Rscript scripts/project_to_triana_reference.R \\\n"
+                f"      --input  {path} \\\n"
+                f"      --output {projected_labels_csv}"
+            )
+        proj = pd.read_csv(projected_labels_csv, index_col='barcode')
+        harmonised = raw_labels.index.map(
+            lambda b: proj.loc[b, 'projected_celltype']
+                      if b in proj.index else None
+        )
+        harmonised = pd.Series(harmonised, index=adata.obs_names, dtype=object)
+        adata.obs['_harmonised'] = harmonised
+        keep = harmonised.notna()
+        adata = adata[keep].copy()
+        print(f"  {path.name}: {adata.n_obs:,} cells with projected labels "
+              f"({keep.sum():,} / {len(keep):,})")
+    else:
+        # --- Beneyto-style: native labels are already Triana vocabulary ---
+        exclude = exclude or set()
+        harmonised = raw_labels.where(~raw_labels.isin(exclude))
+        adata.obs['_harmonised'] = harmonised
+        keep = harmonised.notna()
+        adata = adata[keep].copy()
+        if exclude:
+            print(f"  {path.name}: {adata.n_obs:,} cells after dropping excluded types "
+                  f"({keep.sum():,} / {len(keep):,})")
+        else:
+            print(f"  {path.name}: {adata.n_obs:,} cells loaded")
 
     # Subsample if requested
     if max_cells and adata.n_obs > max_cells:
@@ -1581,11 +1579,20 @@ def main():
     # -------------------------------------------------------------------------
     # Check data availability
     # -------------------------------------------------------------------------
-    for p in [BENEYTO_PATH, VELTEN_PATH]:
-        if not p.exists():
-            print(f"\nERROR: data file not found: {p}")
-            print("Please update BENEYTO_PATH and VELTEN_PATH at the top of this script.")
-            return
+    if not BENEYTO_PATH.exists():
+        print(f"\nERROR: data file not found: {BENEYTO_PATH}")
+        print("Please update BENEYTO_PATH at the top of this script.")
+        return
+
+    have_velten = VELTEN_PATH.exists()
+    if not have_velten:
+        print(f"\nNOTE: Velten data not found ({VELTEN_PATH}).")
+        print("Only Beneyto-only analyses will run.")
+        print("To enable cross-dataset transfer:")
+        print("  1. Upload data/velten.h5ad")
+        print("  2. Run: Rscript scripts/project_to_triana_reference.R \\")
+        print(f"              --input  {VELTEN_PATH} \\")
+        print(f"              --output {TRIANA_PROJECTION_CSV_VELTEN}")
 
     # -------------------------------------------------------------------------
     # Load
@@ -1593,20 +1600,23 @@ def main():
     print("\nLoading Beneyto...")
     adata_beneyto = load_and_prep(
         BENEYTO_PATH, label_col='ct',
-        harmonised_map=BENEYTO_CT_TO_HARMONISED,
+        exclude=BENEYTO_EXCLUDE,
         max_cells=MAX_REF_CELLS,
     )
-    print("\nLoading Velten...")
-    adata_velten = load_and_prep(
-        VELTEN_PATH, label_col='cell_type',
-        harmonised_map=VELTEN_CT_TO_HARMONISED,
-        max_cells=MAX_QUERY_CELLS,
-    )
 
-    print(f"\nBeneyto harmonised label distribution:")
+    if have_velten:
+        print("\nLoading Velten...")
+        adata_velten = load_and_prep(
+            VELTEN_PATH, label_col='cell_type',
+            projected_labels_csv=TRIANA_PROJECTION_CSV_VELTEN,
+            max_cells=MAX_QUERY_CELLS,
+        )
+
+    print(f"\nBeneyto label distribution (Triana vocabulary, native):")
     print(adata_beneyto.obs['_harmonised'].value_counts().to_string())
-    print(f"\nVelten harmonised label distribution:")
-    print(adata_velten.obs['_harmonised'].value_counts().to_string())
+    if have_velten:
+        print(f"\nVelten label distribution (Triana-projected):")
+        print(adata_velten.obs['_harmonised'].value_counts().to_string())
 
     # Gene alignment is handled internally by SCimilarity (its own vocab) and
     # by CellTypist (trained-gene list).  For SingleR we align inside
@@ -1617,6 +1627,10 @@ def main():
     # NOTE: sklearn-based methods that work on raw .X (not used here) would
     # need explicit gene alignment.  CellTypistModel and SCimilarityModel
     # each handle their own gene space internally.
+
+    if not have_velten:
+        print("\nSkipping cross-dataset transfer (Velten data not available).")
+        return
 
     # -------------------------------------------------------------------------
     # Direction A: Beneyto → Velten
@@ -1650,10 +1664,13 @@ def main():
 
         plot_overall_metrics(metrics_a, 'Beneyto → Velten', FIGURE_DIR)
 
+        all_harmonised_cats = sorted(
+            set(adata_beneyto.obs['_harmonised'].dropna().unique()) |
+            set(adata_velten.obs['_harmonised'].dropna().unique())
+        )
         plot_intermediate_confusion(
             preds_a, fine_v,
-            harmonised_categories=sorted((set(VELTEN_CT_TO_HARMONISED.values()) |
-                                          set(BENEYTO_CT_TO_HARMONISED.values())) - {None}),
+            harmonised_categories=all_harmonised_cats,
             intermediate_types=INTERMEDIATE_VELTEN,
             direction='Beneyto → Velten',
             output_dir=FIGURE_DIR,
@@ -1662,19 +1679,20 @@ def main():
         if emb_ref_a is not None and emb_query_a is not None:
             # 1. Dataset mixing
             plot_cross_dataset_mixing(
-                emb_ref=emb_ref_a, 
-                emb_query=emb_query_a, 
-                labels_query=fine_v, 
-                type_category_fn=_velten_type_category, 
+                emb_ref=emb_ref_a,
+                emb_query=emb_query_a,
+                labels_query=fine_v,
+                type_category_fn=_velten_type_category,
                 direction='Beneyto → Velten',
                 output_dir=FIGURE_DIR
             )
-            
+
             # 2. Trajectory Interpolation (three biological axes)
+            # States are in Beneyto's native ct vocabulary (= Triana reference labels)
             trajectory_axes = [
-                ('HSC/Progenitor', 'Early Myeloid',           'Canonical Myeloid Arrest'),
-                ('HSC/Progenitor', 'Lymphomyeloid Progenitor', 'True Intermediate Match'),
-                ('HSC/Progenitor', 'T Cell',                  'Lymphoid Negative Control'),
+                ('HSCs & MPPs',       'Early promyelocytes', 'Canonical Myeloid Arrest'),
+                ('HSCs & MPPs',       'Lymphomyeloid prog',  'True Intermediate Match'),
+                ('HSCs & MPPs',       'CD4+ naive T cells',  'Lymphoid Negative Control'),
             ]
             for start, end, axis_name in trajectory_axes:
                 print(f"    Plotting Trajectory: {start} -> {end} ({axis_name})...")
@@ -1762,8 +1780,7 @@ def main():
 
         plot_intermediate_confusion(
             preds_b, fine_b,
-            harmonised_categories=sorted((set(VELTEN_CT_TO_HARMONISED.values()) |
-                                          set(BENEYTO_CT_TO_HARMONISED.values())) - {None}),
+            harmonised_categories=all_harmonised_cats,
             intermediate_types=INTERMEDIATE_BENEYTO,
             direction='Velten → Beneyto',
             output_dir=FIGURE_DIR,
@@ -1780,11 +1797,12 @@ def main():
                 output_dir=FIGURE_DIR
             )
 
-            # 2. Trajectory Interpolation (three biological axes)
+            # 2. Trajectory Interpolation
+            # Velten _harmonised labels (projected) are in Triana/Beneyto vocabulary
             trajectory_axes = [
-                ('HSC/Progenitor', 'Early Myeloid',           'Canonical Myeloid Arrest'),
-                ('HSC/Progenitor', 'Lymphomyeloid Progenitor', 'True Intermediate Match'),
-                ('HSC/Progenitor', 'T Cell',                  'Lymphoid Negative Control'),
+                ('HSCs & MPPs',       'Early promyelocytes', 'Canonical Myeloid Arrest'),
+                ('HSCs & MPPs',       'Lymphomyeloid prog',  'True Intermediate Match'),
+                ('HSCs & MPPs',       'CD4+ naive T cells',  'Lymphoid Negative Control'),
             ]
             for start, end, axis_name in trajectory_axes:
                 print(f"    Plotting Trajectory: {start} -> {end} ({axis_name})...")
